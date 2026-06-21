@@ -1,0 +1,28 @@
+# Local runtime configuration
+config/pipeline.env
+.env
+.env.*
+!.env.example
+
+# Datasets and generated experiment artifacts
+data/
+outputs/
+logs/
+
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime files
+*.log
+*.pid
+*.model
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
