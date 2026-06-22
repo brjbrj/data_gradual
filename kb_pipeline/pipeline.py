@@ -330,8 +330,15 @@ def run_pipeline(
         _log("[pipeline] evaluating answers and computing mastery...")
         runtime.start(step_model)
         step_client = VLLMClient(model=step_model)
-        step_reports = evaluate_answers(victim_answers, client=step_client)
-        write_jsonl(analysis_dir / "step_evaluations.jsonl", step_reports)
+        step_evaluation_path = analysis_dir / "step_evaluations.jsonl"
+        step_checkpoint_path = analysis_dir / "step_evaluations.jsonl.partial"
+        step_reports = evaluate_answers(
+            victim_answers,
+            client=step_client,
+            checkpoint_path=step_checkpoint_path,
+        )
+        write_jsonl(step_evaluation_path, step_reports)
+        step_checkpoint_path.unlink(missing_ok=True)
         mastery_records = build_mastery_records(step_reports, map_data["source"])
         mastery_records = distribute_mastery_records(
             mastery_records,

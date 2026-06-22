@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import concurrent.futures
 import json
 import math
@@ -10,7 +11,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .client import VLLMClient
 from .distribute import distribute_mastery_records
@@ -502,32 +503,609 @@ class StepEvaluator:
             )
 
 
+def _step_evaluation_inputs(
+    answer_record: Dict[str, Any],
+) -> Tuple[str, str, List[str], str]:
+    question = normalize_whitespace(answer_record.get("question", ""))
+    reference_answer = normalize_whitespace(
+        answer_record.get("reference_answer", "")
+    )
+    parsed_output = answer_record.get("parsed_output", {})
+    if not isinstance(parsed_output, dict):
+        parsed_output = _parse_victim_output(
+            normalize_whitespace(answer_record.get("raw_output", ""))
+        )
+    step_texts = _normalize_steps(
+        parsed_output.get("steps", answer_record.get("steps", []))
+    )
+    candidate_short = (
+        normalize_whitespace(
+            parsed_output.get(
+                "final_answer",
+                answer_record.get("final_answer", ""),
+            )
+        )
+        or answer_record.get("extracted_answer")
+        or ""
+    )
+    return question, reference_answer, step_texts, candidate_short
+
+
+def _evaluation_signature(answer_record: Dict[str, Any]) -> str:
+    question, reference_answer, step_texts, candidate_short = (
+        _step_evaluation_inputs(answer_record)
+    )
+    return json.dumps(
+        [question, reference_answer, step_texts, candidate_short],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _report_signature(report: Dict[str, Any]) -> str:
+    candidate = report.get("candidate_answer", {})
+    if not isinstance(candidate, dict):
+        candidate = {}
+    return json.dumps(
+        [
+            normalize_whitespace(report.get("question", "")),
+            normalize_whitespace(report.get("reference_answer", "")),
+            _normalize_steps(candidate.get("steps", [])),
+            normalize_whitespace(candidate.get("final_answer", "")),
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _parse_step_evaluation_response(
+    answer_record: Dict[str, Any],
+    raw: str,
+) -> Dict[str, Any]:
+    question, reference_answer, step_texts, candidate_short = (
+        _step_evaluation_inputs(answer_record)
+    )
+    parsed = safe_json_from_text(raw) or {}
+    score_keys = (
+        "correctness",
+        "logical",
+        "standardization",
+        "completeness",
+        "efficiency",
+    )
+    score_arrays: Dict[str, List[float]] = {}
+    for key in score_keys:
+        values = parsed.get(key, [])
+        if not isinstance(values, list):
+            raise ValueError(f"missing score array: {key}")
+        if len(values) != len(step_texts):
+            raise ValueError(f"score array length mismatch for {key}")
+        score_arrays[key] = [
+            _normalize_step_score(value)
+            for value in values
+        ]
+    normalized_steps = _build_step_records(step_texts, score_arrays)
+    if not normalized_steps:
+        raise ValueError("no steps to score")
+
+    step_score_sum = (
+        sum(sum(step["scores"].values()) for step in normalized_steps)
+        / 5.0
+    )
+    step_score_mean = step_score_sum / len(normalized_steps)
+    final_answer_correct = _coerce_bool(
+        parsed.get("final_answer_correct")
+    )
+    if not final_answer_correct:
+        final_answer_correct = _is_correct_answer(
+            candidate_short,
+            reference_answer,
+        )
+    overall_reason = normalize_whitespace(
+        parsed.get("overall_reason", "")
+    )
+    if not overall_reason:
+        overall_reason = "model_evaluation"
+
+    return StepEvaluationRecord(
+        task_id=answer_record.get("task_id"),
+        source_task_id=answer_record.get("source_task_id"),
+        attempt_index=int(
+            answer_record.get("attempt_index", 0) or 0
+        ),
+        question=question,
+        reference_answer=reference_answer,
+        candidate_answer={
+            "steps": step_texts,
+            "final_answer": candidate_short,
+        },
+        step_count=len(normalized_steps),
+        steps=normalized_steps,
+        step_score_mean=round(step_score_mean, 4),
+        step_score_sum=round(step_score_sum, 4),
+        final_answer_correct=final_answer_correct,
+        overall_reason=overall_reason,
+    ).__dict__
+
+
+def _fallback_step_evaluation(
+    answer_record: Dict[str, Any],
+) -> Dict[str, Any]:
+    question, reference_answer, step_texts, candidate_short = (
+        _step_evaluation_inputs(answer_record)
+    )
+    fallback = _fallback_step_scores(
+        step_texts,
+        question,
+        reference_answer,
+        candidate_short,
+    )
+    return StepEvaluationRecord(
+        task_id=answer_record.get("task_id"),
+        source_task_id=answer_record.get("source_task_id"),
+        attempt_index=int(
+            answer_record.get("attempt_index", 0) or 0
+        ),
+        question=question,
+        reference_answer=reference_answer,
+        candidate_answer={
+            "steps": step_texts,
+            "final_answer": candidate_short,
+        },
+        step_count=fallback["step_count"],
+        steps=fallback["steps"],
+        step_score_mean=round(
+            float(fallback["step_score_mean"]),
+            4,
+        ),
+        step_score_sum=round(
+            float(fallback["step_score_sum"]),
+            4,
+        ),
+        final_answer_correct=bool(
+            fallback["final_answer_correct"]
+        ),
+        overall_reason=fallback["overall_reason"],
+    ).__dict__
+
+
+def _clone_step_evaluation(
+    report: Dict[str, Any],
+    answer_record: Dict[str, Any],
+) -> Dict[str, Any]:
+    cloned = json.loads(json.dumps(report, ensure_ascii=False))
+    question, reference_answer, step_texts, candidate_short = (
+        _step_evaluation_inputs(answer_record)
+    )
+    cloned.update(
+        {
+            "task_id": answer_record.get("task_id"),
+            "source_task_id": answer_record.get("source_task_id"),
+            "attempt_index": int(
+                answer_record.get("attempt_index", 0) or 0
+            ),
+            "question": question,
+            "reference_answer": reference_answer,
+            "candidate_answer": {
+                "steps": step_texts,
+                "final_answer": candidate_short,
+            },
+        }
+    )
+    return cloned
+
+
+def _read_jsonl_tolerant(path: Optional[Path]) -> List[Dict[str, Any]]:
+    if path is None or not path.exists():
+        return []
+    records: List[Dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                records.append(value)
+    return records
+
+
+def _parse_bool_env(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+async def _evaluate_answers_async(
+    answer_records: Sequence[Dict[str, Any]],
+    *,
+    client: Optional[VLLMClient],
+    max_concurrency: Optional[int],
+    checkpoint_path: Optional[Path],
+    resume: bool,
+) -> List[Dict[str, Any]]:
+    try:
+        from openai import AsyncOpenAI
+    except ImportError as exc:
+        raise RuntimeError(
+            "The pipeline environment requires the openai package."
+        ) from exc
+
+    total = len(answer_records)
+    if total == 0:
+        return []
+
+    workers = _resolve_workers(
+        max_concurrency,
+        "SCORE_CONCURRENCY",
+        default=256,
+    )
+    enable_thinking = _parse_bool_env(
+        "SCORE_ENABLE_THINKING",
+        False,
+    )
+    force_json = _parse_bool_env("SCORE_FORCE_JSON", False)
+    deduplicate = _parse_bool_env("SCORE_DEDUPLICATE", True)
+    fallback_on_exhausted = _parse_bool_env(
+        "SCORE_FALLBACK_ON_EXHAUSTED",
+        False,
+    )
+    max_retries = _parse_int_env(
+        "SCORE_MAX_RETRIES",
+        default=3,
+    )
+    retry_delay = _parse_float_env(
+        "SCORE_RETRY_DELAY",
+        default=1.0,
+    )
+    min_tokens = max(
+        64,
+        _parse_int_env("SCORE_MIN_TOKENS", default=256),
+    )
+    tokens_per_step = max(
+        8,
+        _parse_int_env(
+            "SCORE_TOKENS_PER_STEP",
+            default=24,
+        ),
+    )
+    max_tokens_cap = max(
+        min_tokens,
+        _parse_int_env("SCORE_MAX_TOKENS", default=900),
+    )
+
+    base_url = (
+        client.base_url
+        if client is not None
+        else os.environ.get("VLLM_BASE_URL")
+        or "http://127.0.0.1:8911/v1"
+    )
+    model = (
+        client.model
+        if client is not None
+        else os.environ.get("STEP_MODEL")
+        or os.environ.get("VLLM_MODEL")
+        or "local-model"
+    )
+    api_key = (
+        client.api_key
+        if client is not None
+        else os.environ.get("VLLM_API_KEY")
+        or "EMPTY"
+    )
+    timeout = (
+        client.timeout
+        if client is not None
+        else _parse_int_env("VLLM_TIMEOUT", default=600)
+    )
+
+    async_client = AsyncOpenAI(
+        base_url=base_url.rstrip("/"),
+        api_key=api_key,
+        timeout=timeout,
+        max_retries=0,
+    )
+    semaphore = asyncio.Semaphore(max(1, workers))
+    outputs: List[Optional[Dict[str, Any]]] = [None] * total
+    index_by_task = {
+        str(record.get("task_id")): index
+        for index, record in enumerate(answer_records)
+    }
+    signature_groups: Dict[str, List[int]] = defaultdict(list)
+    for index, record in enumerate(answer_records):
+        signature = _evaluation_signature(record)
+        if not deduplicate:
+            signature = f"{signature}::record:{index}"
+        signature_groups[signature].append(index)
+
+    resumed = 0
+    report_by_signature: Dict[str, Dict[str, Any]] = {}
+    if resume and checkpoint_path is not None:
+        for report in _read_jsonl_tolerant(checkpoint_path):
+            index = index_by_task.get(str(report.get("task_id")))
+            if index is None or outputs[index] is not None:
+                continue
+            outputs[index] = report
+            report_by_signature[_report_signature(report)] = report
+            resumed += 1
+
+    checkpoint_handle = None
+    if checkpoint_path is not None:
+        checkpoint_path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        checkpoint_handle = checkpoint_path.open(
+            "a",
+            encoding="utf-8",
+            buffering=1,
+        )
+
+    def save_report(report: Dict[str, Any]) -> None:
+        if checkpoint_handle is None:
+            return
+        checkpoint_handle.write(
+            json.dumps(report, ensure_ascii=False) + "\n"
+        )
+
+    completed = resumed
+    dedup_reused = 0
+    pending_signatures: List[str] = []
+    for signature, indices in signature_groups.items():
+        existing = report_by_signature.get(signature)
+        if existing is None:
+            existing = next(
+                (
+                    outputs[index]
+                    for index in indices
+                    if outputs[index] is not None
+                ),
+                None,
+            )
+        if existing is not None and deduplicate:
+            for index in indices:
+                if outputs[index] is not None:
+                    continue
+                cloned = _clone_step_evaluation(
+                    existing,
+                    answer_records[index],
+                )
+                outputs[index] = cloned
+                save_report(cloned)
+                completed += 1
+                dedup_reused += 1
+            continue
+        unresolved = [
+            index for index in indices
+            if outputs[index] is None
+        ]
+        if unresolved:
+            pending_signatures.append(signature)
+
+    request_total = len(pending_signatures)
+    saved_requests = total - resumed - request_total
+    print(
+        f"[score] records={total} unique_requests={request_total} "
+        f"resumed={resumed} dedup_saved={saved_requests} "
+        f"concurrency={workers} thinking={enable_thinking} "
+        f"force_json={force_json} "
+        f"fallback={fallback_on_exhausted} "
+        f"max_tokens_cap={max_tokens_cap}",
+        flush=True,
+    )
+
+    async def evaluate_signature(
+        signature: str,
+    ) -> Tuple[str, Optional[Dict[str, Any]], str]:
+        representative_index = signature_groups[signature][0]
+        record = answer_records[representative_index]
+        question, reference_answer, step_texts, candidate_short = (
+            _step_evaluation_inputs(record)
+        )
+        prompt = build_step_evaluation_prompt(
+            question,
+            reference_answer,
+            step_texts,
+            candidate_short,
+        )
+        request: Dict[str, Any] = {
+            "model": model,
+            "messages": prompt,
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "max_tokens": min(
+                max_tokens_cap,
+                max(
+                    min_tokens,
+                    96 + tokens_per_step * len(step_texts),
+                ),
+            ),
+        }
+        if force_json:
+            request["response_format"] = {
+                "type": "json_object"
+            }
+        if not enable_thinking:
+            request["extra_body"] = {
+                "chat_template_kwargs": {
+                    "enable_thinking": False
+                }
+            }
+        try:
+            async with semaphore:
+                response = (
+                    await async_client.chat.completions.create(
+                        **request
+                    )
+                )
+            raw = response.choices[0].message.content or ""
+            return (
+                signature,
+                _parse_step_evaluation_response(record, raw),
+                "",
+            )
+        except Exception as exc:
+            return (
+                signature,
+                None,
+                f"{type(exc).__name__}: {exc}",
+            )
+
+    started_at = time.time()
+    pending = pending_signatures
+    round_index = 0
+    infinite_retries = max_retries < 0
+    last_errors: Dict[str, str] = {}
+    try:
+        while pending and (
+            infinite_retries or round_index <= max_retries
+        ):
+            print(
+                f"[score] round={round_index} "
+                f"requests={len(pending)}",
+                flush=True,
+            )
+            tasks = [
+                asyncio.create_task(
+                    evaluate_signature(signature)
+                )
+                for signature in pending
+            ]
+            next_pending: List[str] = []
+            round_done = 0
+            for task in asyncio.as_completed(tasks):
+                signature, report, error = await task
+                round_done += 1
+                if report is None:
+                    last_errors[signature] = error
+                    next_pending.append(signature)
+                else:
+                    report_by_signature[signature] = report
+                    for index in signature_groups[signature]:
+                        if outputs[index] is not None:
+                            continue
+                        cloned = _clone_step_evaluation(
+                            report,
+                            answer_records[index],
+                        )
+                        outputs[index] = cloned
+                        save_report(cloned)
+                        completed += 1
+                if _should_log_progress(round_done, len(tasks)):
+                    elapsed = time.time() - started_at
+                    rate = completed / elapsed if elapsed > 0 else 0.0
+                    eta = (
+                        (total - completed) / rate
+                        if rate > 0
+                        else 0.0
+                    )
+                    print(
+                        f"[score] round={round_index} "
+                        f"{round_done}/{len(tasks)} "
+                        f"records={completed}/{total} "
+                        f"failed={len(next_pending)} "
+                        f"elapsed={_format_seconds(elapsed)} "
+                        f"eta={_format_seconds(eta)}",
+                        flush=True,
+                    )
+
+            pending = next_pending
+            if pending:
+                print(
+                    f"[score] round={round_index} complete "
+                    f"retry={len(pending)}",
+                    flush=True,
+                )
+                round_index += 1
+                if (
+                    infinite_retries
+                    or round_index <= max_retries
+                ) and retry_delay > 0:
+                    await asyncio.sleep(retry_delay)
+
+        if pending:
+            if not fallback_on_exhausted:
+                examples = [
+                    last_errors.get(signature, "unknown error")
+                    for signature in pending[:3]
+                ]
+                raise RuntimeError(
+                    "step scoring retries exhausted for "
+                    f"{len(pending)} unique responses; completed "
+                    f"records are preserved in {checkpoint_path}. "
+                    f"Examples: {examples}"
+                )
+            print(
+                f"[score] retries exhausted; applying configured "
+                f"fallback to {len(pending)} unique responses",
+                flush=True,
+            )
+            for signature in pending:
+                representative_index = signature_groups[signature][0]
+                report = _fallback_step_evaluation(
+                    answer_records[representative_index]
+                )
+                report["overall_reason"] = (
+                    "heuristic_fallback_after_retries: "
+                    + last_errors.get(signature, "unknown error")
+                )
+                for index in signature_groups[signature]:
+                    if outputs[index] is not None:
+                        continue
+                    cloned = _clone_step_evaluation(
+                        report,
+                        answer_records[index],
+                    )
+                    outputs[index] = cloned
+                    save_report(cloned)
+                    completed += 1
+    finally:
+        if checkpoint_handle is not None:
+            checkpoint_handle.close()
+        await async_client.close()
+
+    print(
+        f"[score] complete records={completed}/{total} "
+        f"requests={request_total} dedup_reused={dedup_reused} "
+        f"elapsed={_format_seconds(time.time() - started_at)}",
+        flush=True,
+    )
+    return [
+        record
+        for record in outputs
+        if record is not None
+    ]
+
+
 def evaluate_answers(
     answer_records: Sequence[Dict[str, Any]],
     client: Optional[VLLMClient] = None,
     max_concurrency: Optional[int] = None,
+    checkpoint_path: Optional[Path] = None,
+    resume: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
-    evaluator = StepEvaluator(client=client)
-    total = len(answer_records)
-    started_at = time.time()
-    workers = _resolve_workers(max_concurrency, "SCORE_CONCURRENCY", default=256)
-    if total == 0:
-        return []
-
-    outputs: List[Optional[Dict[str, Any]]] = [None] * total
-    done = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, total)) as executor:
-        future_to_index = {
-            executor.submit(evaluator.evaluate_one, record): index
-            for index, record in enumerate(answer_records)
-        }
-        for future in concurrent.futures.as_completed(future_to_index):
-            index = future_to_index[future]
-            outputs[index] = future.result().__dict__
-            done += 1
-            if _should_log_progress(done, total):
-                print(_progress_line("[score]", done, total, started_at), flush=True)
-    return [record for record in outputs if record is not None]
+    return asyncio.run(
+        _evaluate_answers_async(
+            answer_records,
+            client=client,
+            max_concurrency=max_concurrency,
+            checkpoint_path=checkpoint_path,
+            resume=(
+                _parse_bool_env("SCORE_RESUME", True)
+                if resume is None
+                else bool(resume)
+            ),
+        )
+    )
 
 
 def _compute_weight(score: float, method: str = "linear_cutoff") -> float:
@@ -716,8 +1294,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             raise ValueError("--seed-input is required in score/all mode")
         seed_records = read_jsonl(Path(args.seed_input))
         answer_records = read_jsonl(input_path)
-        step_reports = evaluate_answers(answer_records)
+        step_checkpoint_path = step_path.with_name(
+            step_path.name + ".partial"
+        )
+        step_reports = evaluate_answers(
+            answer_records,
+            checkpoint_path=step_checkpoint_path,
+        )
         write_jsonl(step_path, step_reports)
+        step_checkpoint_path.unlink(missing_ok=True)
 
         source_lookup = {record.get("task_id"): record for record in seed_records}
         mastery_records = build_mastery_records(step_reports, source_lookup)

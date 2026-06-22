@@ -9,6 +9,7 @@ if [[ "${PIPELINE_CONFIG_LOADED:-0}" != "1" ]]; then
 fi
 
 BACKGROUND=0
+DRY_RUN=0
 PID_FILE="${VLLM_PID_FILE:-${ROOT_DIR}/outputs/runtime/vllm.pid}"
 LOG_FILE="${VLLM_LOG_FILE:-${ROOT_DIR}/outputs/runtime/vllm.log}"
 while [[ $# -gt 0 ]]; do
@@ -25,6 +26,10 @@ while [[ $# -gt 0 ]]; do
       LOG_FILE="$2"
       shift 2
       ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
     *)
       break
       ;;
@@ -39,12 +44,53 @@ PORT="${VLLM_PORT:-8911}"
 TP="${VLLM_TP:-2}"
 MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-8192}"
 GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
-CUDA_VISIBLE_DEVICES_VALUE="${CUDA_VISIBLE_DEVICES:-0,1}"
-NCCL_P2P_DISABLE_VALUE="${NCCL_P2P_DISABLE:-1}"
-NCCL_IB_DISABLE_VALUE="${NCCL_IB_DISABLE:-1}"
-NCCL_DEBUG_VALUE="${NCCL_DEBUG:-INFO}"
-NCCL_SOCKET_IFNAME_VALUE="${NCCL_SOCKET_IFNAME:-lo}"
-NCCL_BLOCKING_WAIT_VALUE="${NCCL_BLOCKING_WAIT:-1}"
+ENABLE_AUTO_TOOL_CHOICE="${VLLM_ENABLE_AUTO_TOOL_CHOICE:-1}"
+TOOL_CALL_PARSER="${VLLM_TOOL_CALL_PARSER:-hermes}"
+ENFORCE_EAGER="${VLLM_ENFORCE_EAGER:-0}"
+DISABLE_CUSTOM_ALL_REDUCE="${VLLM_DISABLE_CUSTOM_ALL_REDUCE:-0}"
+
+CUDA_VISIBLE_DEVICES_VALUE="${VLLM_CUDA_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-0,1}}"
+NCCL_P2P_DISABLE_VALUE="${VLLM_NCCL_P2P_DISABLE:-${NCCL_P2P_DISABLE:-1}}"
+NCCL_IB_DISABLE_VALUE="${VLLM_NCCL_IB_DISABLE:-${NCCL_IB_DISABLE:-1}}"
+NCCL_DEBUG_VALUE="${VLLM_NCCL_DEBUG:-${NCCL_DEBUG:-INFO}}"
+NCCL_SOCKET_IFNAME_VALUE="${VLLM_NCCL_SOCKET_IFNAME:-${NCCL_SOCKET_IFNAME:-lo}}"
+NCCL_BLOCKING_WAIT_VALUE="${VLLM_NCCL_BLOCKING_WAIT:-${NCCL_BLOCKING_WAIT:-1}}"
+TORCH_NCCL_BLOCKING_WAIT_VALUE="${VLLM_TORCH_NCCL_BLOCKING_WAIT:-inherit}"
+NCCL_ALGO_VALUE="${VLLM_NCCL_ALGO:-inherit}"
+NCCL_P2P_LEVEL_VALUE="${VLLM_NCCL_P2P_LEVEL:-inherit}"
+NCCL_PXN_DISABLE_VALUE="${VLLM_NCCL_PXN_DISABLE:-inherit}"
+NCCL_CUMEM_ENABLE_VALUE="${VLLM_NCCL_CUMEM_ENABLE:-inherit}"
+GLOO_SOCKET_IFNAME_VALUE="${VLLM_GLOO_SOCKET_IFNAME:-inherit}"
+VLLM_HOST_IP_VALUE="${VLLM_HOST_IP_CONFIG:-inherit}"
+
+is_enabled() {
+  case "${1,,}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+apply_env_setting() {
+  local variable_name="$1"
+  local value="$2"
+  case "${value,,}" in
+    unset)
+      unset "${variable_name}"
+      echo "[start_vllm] unset ${variable_name}" >&2
+      ;;
+    inherit)
+      local current_value="<unset>"
+      if [[ -v "${variable_name}" ]]; then
+        current_value="${!variable_name}"
+      fi
+      echo "[start_vllm] inherit ${variable_name}=${current_value}" >&2
+      ;;
+    *)
+      export "${variable_name}=${value}"
+      echo "[start_vllm] export ${variable_name}=${value}" >&2
+      ;;
+  esac
+}
 
 if [[ -n "${VLLM_PYTHON_BIN}" ]]; then
   if [[ ! -x "${VLLM_PYTHON_BIN}" ]]; then
@@ -69,14 +115,19 @@ else
   fi
 fi
 
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES_VALUE}"
-export NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE_VALUE}"
-export NCCL_IB_DISABLE="${NCCL_IB_DISABLE_VALUE}"
-export NCCL_DEBUG="${NCCL_DEBUG_VALUE}"
-export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME_VALUE}"
-export NCCL_BLOCKING_WAIT="${NCCL_BLOCKING_WAIT_VALUE}"
-
-pkill -f "vllm.entrypoints.openai.api_server" >/dev/null 2>&1 || true
+apply_env_setting "CUDA_VISIBLE_DEVICES" "${CUDA_VISIBLE_DEVICES_VALUE}"
+apply_env_setting "NCCL_P2P_DISABLE" "${NCCL_P2P_DISABLE_VALUE}"
+apply_env_setting "NCCL_IB_DISABLE" "${NCCL_IB_DISABLE_VALUE}"
+apply_env_setting "NCCL_DEBUG" "${NCCL_DEBUG_VALUE}"
+apply_env_setting "NCCL_SOCKET_IFNAME" "${NCCL_SOCKET_IFNAME_VALUE}"
+apply_env_setting "NCCL_BLOCKING_WAIT" "${NCCL_BLOCKING_WAIT_VALUE}"
+apply_env_setting "TORCH_NCCL_BLOCKING_WAIT" "${TORCH_NCCL_BLOCKING_WAIT_VALUE}"
+apply_env_setting "NCCL_ALGO" "${NCCL_ALGO_VALUE}"
+apply_env_setting "NCCL_P2P_LEVEL" "${NCCL_P2P_LEVEL_VALUE}"
+apply_env_setting "NCCL_PXN_DISABLE" "${NCCL_PXN_DISABLE_VALUE}"
+apply_env_setting "NCCL_CUMEM_ENABLE" "${NCCL_CUMEM_ENABLE_VALUE}"
+apply_env_setting "GLOO_SOCKET_IFNAME" "${GLOO_SOCKET_IFNAME_VALUE}"
+apply_env_setting "VLLM_HOST_IP" "${VLLM_HOST_IP_VALUE}"
 
 mkdir -p "$(dirname "${PID_FILE}")"
 mkdir -p "$(dirname "${LOG_FILE}")"
@@ -90,9 +141,29 @@ CMD=("${VLLM_PYTHON_BIN}" -m vllm.entrypoints.openai.api_server
   --max-model-len "${MAX_MODEL_LEN}"
   --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}"
   --trust-remote-code
-  --enable-auto-tool-choice
-  --tool-call-parser hermes
 )
+
+if is_enabled "${ENABLE_AUTO_TOOL_CHOICE}"; then
+  CMD+=(--enable-auto-tool-choice)
+  if [[ -n "${TOOL_CALL_PARSER}" ]]; then
+    CMD+=(--tool-call-parser "${TOOL_CALL_PARSER}")
+  fi
+fi
+if is_enabled "${ENFORCE_EAGER}"; then
+  CMD+=(--enforce-eager)
+fi
+if is_enabled "${DISABLE_CUSTOM_ALL_REDUCE}"; then
+  CMD+=(--disable-custom-all-reduce)
+fi
+
+if [[ "${DRY_RUN}" -eq 1 ]]; then
+  printf '[start_vllm] command:'
+  printf ' %q' "${CMD[@]}"
+  printf '\n'
+  exit 0
+fi
+
+pkill -f "vllm.entrypoints.openai.api_server" >/dev/null 2>&1 || true
 
 if [[ "${BACKGROUND}" -eq 1 ]]; then
   nohup "${CMD[@]}" >"${LOG_FILE}" 2>&1 &

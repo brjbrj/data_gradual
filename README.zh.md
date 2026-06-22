@@ -306,6 +306,40 @@ VLLM_PYTHON=/opt/miniconda3/envs/vllm_runtime/bin/python
 
 模型、输入和输出路径也需要修改为新机器上的实际路径。
 
+## 双卡 vLLM/NCCL 配置
+
+当前部署服务器的默认配置保持不变：
+
+```bash
+VLLM_ENFORCE_EAGER=0
+VLLM_ENABLE_AUTO_TOOL_CHOICE=1
+VLLM_TOOL_CALL_PARSER=hermes
+VLLM_CUDA_VISIBLE_DEVICES=0,1
+VLLM_NCCL_P2P_DISABLE=1
+VLLM_NCCL_IB_DISABLE=1
+VLLM_NCCL_DEBUG=INFO
+VLLM_NCCL_SOCKET_IFNAME=lo
+VLLM_NCCL_BLOCKING_WAIT=1
+```
+
+配置值支持三种形式：
+
+- 普通值，如 `1`、`lo`：启动前执行 `export`。
+- `unset`：启动前明确删除该环境变量。
+- `inherit`：保留启动脚本父进程中的原值。
+
+如果另一台机器原生 GPU P2P 可以工作，且强制
+`NCCL_P2P_DISABLE=1` 会卡住，可将
+`config/vllm.p2p-enabled.example.env` 中的配置合并到
+`pipeline.env`。该模板会启用 eager，并取消强制 P2P、loopback
+网卡和 blocking-wait 配置。
+
+验证配置但不停止或启动 vLLM：
+
+```bash
+bash run/start_vllm.sh --dry-run
+```
+
 - `validation_reports.jsonl`：每轮预检、盲解、审计和最终决策。
 - `validation.failed.jsonl`：当前最终未通过的题目。
 - `repair_history.jsonl`：每次修正前后内容、错误原因和原始响应。

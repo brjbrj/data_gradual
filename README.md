@@ -81,6 +81,34 @@ Alternatively, leave both environment names empty and set
 `PIPELINE_PYTHON`/`VLLM_PYTHON` to absolute interpreter paths. Model, input,
 and output paths must also match the new machine.
 
+## Multi-GPU vLLM/NCCL profiles
+
+The default profile preserves the current deployed server behavior:
+
+```bash
+VLLM_ENFORCE_EAGER=0
+VLLM_ENABLE_AUTO_TOOL_CHOICE=1
+VLLM_TOOL_CALL_PARSER=hermes
+VLLM_CUDA_VISIBLE_DEVICES=0,1
+VLLM_NCCL_P2P_DISABLE=1
+VLLM_NCCL_IB_DISABLE=1
+VLLM_NCCL_DEBUG=INFO
+VLLM_NCCL_SOCKET_IFNAME=lo
+VLLM_NCCL_BLOCKING_WAIT=1
+```
+
+Each environment setting accepts a normal exported value, `unset` to remove
+the variable, or `inherit` to preserve the parent value. Machines where native
+GPU P2P works should merge `config/vllm.p2p-enabled.example.env` into
+`pipeline.env`.
+
+Inspect the resolved environment and command without stopping or launching
+vLLM:
+
+```bash
+bash run/start_vllm.sh --dry-run
+```
+
 ## Validation design
 
 Blind solvers receive only the generated question. They never see the candidate steps or answer. The auditor later receives the candidate, blind consensus, target difficulty, and seed question/solution as a relative-difficulty reference.
