@@ -2,19 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG_FILE="${ROOT_DIR}/config/pipeline.env"
-
-if [[ -f "${CONFIG_FILE}" ]]; then
-  # shellcheck disable=SC1090
-  set -a
-  source "${CONFIG_FILE}"
-  set +a
-fi
-
-PYTHON_BIN="${BRJ_PYTHON:-/root/miniconda3/envs/brj/bin/python}"
-if [[ ! -x "${PYTHON_BIN}" ]]; then
-  PYTHON_BIN="${PYTHON:-python}"
-fi
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/run/common_env.sh"
+load_pipeline_config "${ROOT_DIR}"
+activate_pipeline_env
+PYTHON_BIN="$(resolve_pipeline_python)"
 
 DATASET_NAME="${DATASET_NAME:-gsm8k}"
 if [[ $# -gt 0 && "${1:-}" != --* ]]; then

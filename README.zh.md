@@ -95,7 +95,6 @@ GEN_TOP_P_MAP={"Easy":0.3,"Slightly Easy":0.4,"Equal":0.5,"Slightly Hard":0.6,"H
 
 ```bash
 cd /root/brjverl/data_gradual_new
-conda activate brj
 bash run/run_full_pipeline.sh gsm8k
 ```
 
@@ -268,6 +267,44 @@ repair_history.jsonl
 validated.summary.json
 validation.rounds/
 ```
+
+## 环境配置与机器迁移
+
+启动脚本会自动读取 `config/pipeline.env`，无需提前手动执行
+`conda activate`。主流程环境和 vLLM 环境可以分别配置：
+
+```bash
+CONDA_SH=/root/miniconda3/etc/profile.d/conda.sh
+PIPELINE_CONDA_ENV=brj
+PIPELINE_PYTHON=
+VLLM_CONDA_ENV=qwen
+VLLM_PYTHON=
+```
+
+- `PIPELINE_CONDA_ENV`：主流程使用的 Conda 环境名。
+- `VLLM_CONDA_ENV`：vLLM 服务使用的 Conda 环境名。
+- `CONDA_SH`：新机器上的 Conda 初始化脚本路径；留空时自动检测。
+- `PIPELINE_PYTHON`：可选的主流程 Python 绝对路径，设置后跳过 Conda 激活。
+- `VLLM_PYTHON`：可选的 vLLM Python 绝对路径，设置后跳过 Conda 激活。
+
+例如迁移到另一台机器：
+
+```bash
+CONDA_SH=/opt/miniconda3/etc/profile.d/conda.sh
+PIPELINE_CONDA_ENV=math_pipeline
+VLLM_CONDA_ENV=vllm_runtime
+```
+
+如果不想依赖环境名，也可以直接指定解释器：
+
+```bash
+PIPELINE_CONDA_ENV=
+PIPELINE_PYTHON=/opt/miniconda3/envs/math_pipeline/bin/python
+VLLM_CONDA_ENV=
+VLLM_PYTHON=/opt/miniconda3/envs/vllm_runtime/bin/python
+```
+
+模型、输入和输出路径也需要修改为新机器上的实际路径。
 
 - `validation_reports.jsonl`：每轮预检、盲解、审计和最终决策。
 - `validation.failed.jsonl`：当前最终未通过的题目。

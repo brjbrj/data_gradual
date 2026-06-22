@@ -24,9 +24,11 @@ Training-format export is not connected yet.
 
 ```bash
 cd /root/brjverl/data_gradual_new
-conda activate brj
 bash run/run_full_pipeline.sh gsm8k
 ```
+
+The launcher automatically loads and activates the configured pipeline
+environment.
 
 The full pipeline validates by default. To stop after generation:
 
@@ -48,6 +50,11 @@ Edit `config/pipeline.env`.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `CONDA_SH` | `/root/miniconda3/etc/profile.d/conda.sh` | Conda initialization script; leave empty for auto-detection |
+| `PIPELINE_CONDA_ENV` | `brj` | Conda environment used by the main pipeline |
+| `PIPELINE_PYTHON` | empty | Optional absolute pipeline Python path; skips Conda activation |
+| `VLLM_CONDA_ENV` | `qwen` | Conda environment used by the vLLM server |
+| `VLLM_PYTHON` | empty | Optional absolute vLLM Python path; skips Conda activation |
 | `RUN_VALIDATION` | `1` | Enable validation in the full pipeline |
 | `QC_CONCURRENCY` | `256` | Concurrent verifier requests |
 | `QC_BLIND_VOTES` | `2` | Initial independent blind solutions |
@@ -57,6 +64,22 @@ Edit `config/pipeline.env`.
 | `QC_ENABLE_THINKING` | `0` | Disable Qwen thinking mode |
 | `QC_FORCE_JSON` | `0` | Optional JSON response format |
 | `QC_ROUND_RETRY_DELAY` | `1` | Delay between validation rounds |
+
+### Moving to another machine
+
+Normally, only these values need to change:
+
+```bash
+CONDA_SH=/opt/miniconda3/etc/profile.d/conda.sh
+PIPELINE_CONDA_ENV=math_pipeline
+PIPELINE_PYTHON=
+VLLM_CONDA_ENV=vllm_runtime
+VLLM_PYTHON=
+```
+
+Alternatively, leave both environment names empty and set
+`PIPELINE_PYTHON`/`VLLM_PYTHON` to absolute interpreter paths. Model, input,
+and output paths must also match the new machine.
 
 ## Validation design
 

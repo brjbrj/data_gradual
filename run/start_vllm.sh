@@ -2,6 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/run/common_env.sh"
+if [[ "${PIPELINE_CONFIG_LOADED:-0}" != "1" ]]; then
+  load_pipeline_config "${ROOT_DIR}"
+fi
 
 BACKGROUND=0
 PID_FILE="${VLLM_PID_FILE:-${ROOT_DIR}/outputs/runtime/vllm.pid}"
@@ -27,14 +32,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 MODEL_NAME="${VLLM_MODEL:-${OPENAI_MODEL:-/root/brjverl/models/Qwen3.6-27B}}"
-CONDA_ENV_NAME="${VLLM_CONDA_ENV:-}"
-if [[ -z "${CONDA_ENV_NAME}" ]]; then
-  CONDA_ENV_NAME="${DEFAULT_VLLM_CONDA_ENV:-qwen}"
-fi
-if [[ "${CONDA_ENV_NAME}" == "brj" ]]; then
-  echo "[start_vllm] refusing to start vLLM in brj env; please use qwen" >&2
-  exit 1
-fi
+CONDA_ENV_NAME="${VLLM_CONDA_ENV:-${DEFAULT_VLLM_CONDA_ENV:-qwen}}"
+VLLM_PYTHON_BIN="${VLLM_PYTHON:-}"
 HOST="${VLLM_HOST:-0.0.0.0}"
 PORT="${VLLM_PORT:-8911}"
 TP="${VLLM_TP:-2}"
@@ -47,16 +46,28 @@ NCCL_DEBUG_VALUE="${NCCL_DEBUG:-INFO}"
 NCCL_SOCKET_IFNAME_VALUE="${NCCL_SOCKET_IFNAME:-lo}"
 NCCL_BLOCKING_WAIT_VALUE="${NCCL_BLOCKING_WAIT:-1}"
 
-CONDA_SH="${CONDA_SH:-/root/miniconda3/etc/profile.d/conda.sh}"
-if [[ -f "${CONDA_SH}" ]]; then
-  # Only the vLLM server uses qwen; the main pipeline keeps running in brj.
-  source "${CONDA_SH}"
-  conda activate "${CONDA_ENV_NAME}"
+if [[ -n "${VLLM_PYTHON_BIN}" ]]; then
+  if [[ ! -x "${VLLM_PYTHON_BIN}" ]]; then
+    echo "[start_vllm] VLLM_PYTHON is not executable: ${VLLM_PYTHON_BIN}" >&2
+    exit 1
+  fi
+  echo "[start_vllm] using configured Python: ${VLLM_PYTHON_BIN}" >&2
 else
-  echo "[start_vllm] conda.sh not found: ${CONDA_SH}" >&2
-  exit 1
+  if [[ -z "${CONDA_ENV_NAME}" ]]; then
+    VLLM_PYTHON_BIN="$(command -v python)"
+    echo "[start_vllm] using current Python environment" >&2
+  else
+    if ! CONDA_SH_PATH="$(resolve_conda_sh)"; then
+      echo "[start_vllm] cannot locate conda.sh; set CONDA_SH" >&2
+      exit 1
+    fi
+    # shellcheck disable=SC1090
+    source "${CONDA_SH_PATH}"
+    conda activate "${CONDA_ENV_NAME}"
+    VLLM_PYTHON_BIN="$(command -v python)"
+    echo "[start_vllm] using conda environment: ${CONDA_ENV_NAME}" >&2
+  fi
 fi
-echo "[start_vllm] using conda env: ${CONDA_ENV_NAME}" >&2
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES_VALUE}"
 export NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE_VALUE}"
@@ -71,7 +82,7 @@ mkdir -p "$(dirname "${PID_FILE}")"
 mkdir -p "$(dirname "${LOG_FILE}")"
 MODEL_FILE="${VLLM_MODEL_FILE:-${PID_FILE%.pid}.model}"
 
-CMD=(python -m vllm.entrypoints.openai.api_server
+CMD=("${VLLM_PYTHON_BIN}" -m vllm.entrypoints.openai.api_server
   --model "${MODEL_NAME}"
   --host "${HOST}"
   --port "${PORT}"
