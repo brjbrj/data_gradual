@@ -33,14 +33,28 @@ def _log(message: str) -> None:
 
 
 class VLLMManager:
-    def __init__(self, runtime_dir: Path, start_timeout_sec: int = 300, start_poll_sec: int = 5) -> None:
+    def __init__(
+        self,
+        runtime_dir: Path,
+        start_timeout_sec: int = 300,
+        start_poll_sec: int = 5,
+        runtime_mode: str = "external",
+    ) -> None:
         self.runtime_dir = runtime_dir
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.pid_file = self.runtime_dir / "vllm.pid"
         self.log_file = self.runtime_dir / "vllm.log"
         self.current_model: Optional[str] = None
         self.owned: bool = False
-        self.start_timeout_sec = max(30, int(start_timeout_sec))
+        self.runtime_mode = str(runtime_mode).strip().lower()
+        if self.runtime_mode not in {"external", "managed"}:
+            raise ValueError(
+                "vLLM runtime mode must be 'external' or 'managed', "
+                f"got {runtime_mode!r}"
+            )
+        self.start_timeout_sec = int(start_timeout_sec)
+        if self.runtime_mode == "managed":
+            self.start_timeout_sec = max(30, self.start_timeout_sec)
         self.start_poll_sec = max(1, int(start_poll_sec))
 
     def _run(self, command: Sequence[str], env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
@@ -55,7 +69,75 @@ class VLLMManager:
         except Exception:
             return None
 
+    @staticmethod
+    def _models_match(running: Optional[str], expected: str) -> bool:
+        if not running:
+            return False
+        return normalize_whitespace(running).rstrip("/") == normalize_whitespace(
+            expected
+        ).rstrip("/")
+
+    def _wait_for_external_model(self, model: str) -> None:
+        base_url = os.environ.get(
+            "VLLM_BASE_URL",
+            "http://127.0.0.1:8911/v1",
+        )
+        _log(
+            "[vLLM] external mode: the pipeline will not start, stop, "
+            "or switch the vLLM process"
+        )
+        _log(f"[vLLM] waiting for externally served model: {model}")
+        _log(f"[vLLM] endpoint: {base_url}")
+
+        started_at = time.monotonic()
+        last_running: Optional[str] = None
+        last_progress_log = -30
+        while True:
+            running = self.probe()
+            if self._models_match(running, model):
+                self.current_model = model
+                self.owned = False
+                _log(f"[vLLM] external service ready: {model}")
+                return
+
+            if running != last_running:
+                if running:
+                    _log(
+                        f"[vLLM] external service currently serves: {running}; "
+                        f"please switch it to: {model}"
+                    )
+                else:
+                    _log(
+                        "[vLLM] external service is not ready; start the "
+                        f"required model on the configured endpoint: {model}"
+                    )
+                last_running = running
+
+            elapsed = int(time.monotonic() - started_at)
+            if self.start_timeout_sec >= 0 and elapsed >= self.start_timeout_sec:
+                raise RuntimeError(
+                    "External vLLM service did not become ready for model "
+                    f"{model} within {self.start_timeout_sec}s. Start or switch "
+                    f"the model in another terminal on {base_url}."
+                )
+            if elapsed - last_progress_log >= 30:
+                timeout_text = (
+                    "unlimited"
+                    if self.start_timeout_sec < 0
+                    else f"{self.start_timeout_sec}s"
+                )
+                _log(
+                    f"[vLLM] still waiting for {model}: "
+                    f"elapsed={elapsed}s timeout={timeout_text}"
+                )
+                last_progress_log = elapsed
+            time.sleep(self.start_poll_sec)
+
     def stop(self, force: bool = False) -> None:
+        if self.runtime_mode == "external":
+            self.current_model = None
+            self.owned = False
+            return
         if not force and not self.owned:
             return
         script = _project_root() / "run" / "stop_vllm.sh"
@@ -71,11 +153,14 @@ class VLLMManager:
         self.owned = False
 
     def start(self, model: str) -> None:
-        if self.current_model == model:
+        if self.runtime_mode == "external":
+            self._wait_for_external_model(model)
+            return
+        if self._models_match(self.current_model, model):
             _log(f"[vLLM] already using model: {model}")
             return
         running = self.probe()
-        if running == model:
+        if self._models_match(running, model):
             self.current_model = model
             self.owned = False
             _log(f"[vLLM] reusing existing model: {model}")
@@ -99,7 +184,7 @@ class VLLMManager:
         for poll_idx in range(total_polls):
             time.sleep(self.start_poll_sec)
             running = self.probe()
-            if running == model:
+            if self._models_match(running, model):
                 self.current_model = model
                 self.owned = True
                 _log(f"[vLLM] ready: {model}")
@@ -247,6 +332,7 @@ def run_pipeline(
     run_validation: Optional[bool] = None,
     vllm_start_timeout_sec: int = 300,
     vllm_start_poll_sec: int = 5,
+    vllm_runtime_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     root = _project_root()
     input_path = str(input_path)
@@ -271,11 +357,20 @@ def run_pipeline(
     qc_model = qc_model or os.environ.get("QC_MODEL") or os.environ.get("QUALITY_MODEL") or step_model
     gen_model = gen_model or os.environ.get("GEN_MODEL") or os.environ.get("VLLM_GEN_MODEL") or os.environ.get("VLLM_MODEL") or "/root/brjverl/models/Qwen3.6-27B"
     repair_model = repair_model or os.environ.get("REPAIR_MODEL") or os.environ.get("VLLM_REPAIR_MODEL") or gen_model
+    vllm_runtime_mode = (
+        vllm_runtime_mode
+        or os.environ.get("VLLM_RUNTIME_MODE")
+        or "external"
+    )
 
     runtime = VLLMManager(
-        output_dir_path / "runtime" / dataset_name,
+        # All datasets share one managed vLLM service and one fixed API port.
+        # A dataset-specific PID file makes another run misclassify the same
+        # managed server as an unrelated external process.
+        output_dir_path / "runtime" / "vllm",
         start_timeout_sec=vllm_start_timeout_sec,
         start_poll_sec=vllm_start_poll_sec,
+        runtime_mode=vllm_runtime_mode,
     )
     try:
         _log(f"[pipeline] dataset={dataset_name}")
@@ -293,6 +388,7 @@ def run_pipeline(
         _log(f"[pipeline] synthesis_max_per_seed={synthesis_max_per_seed}")
         _log(f"[pipeline] synthesis_balance_lambda={synthesis_balance_lambda}")
         _log(f"[pipeline] run_validation={run_validation}")
+        _log(f"[pipeline] vllm_runtime_mode={vllm_runtime_mode}")
         _log(f"[pipeline] step_model={step_model}")
         _log(f"[pipeline] gen_model={gen_model}")
         _log("[pipeline] building knowledge base...")
@@ -536,8 +632,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--synthesis-max-per-seed", type=int, required=False)
     parser.add_argument("--synthesis-balance-lambda", type=float, required=False)
     parser.add_argument("--skip-validation", action="store_true", help="Stop after generation")
-    parser.add_argument("--vllm-start-timeout-sec", type=int, default=300, help="Seconds to wait for vLLM startup before failing")
-    parser.add_argument("--vllm-start-poll-sec", type=int, default=5, help="Polling interval in seconds while waiting for vLLM startup")
+    parser.add_argument("--vllm-start-timeout-sec", type=int, default=None, help="Seconds to wait for vLLM startup before failing; -1 waits indefinitely in external mode")
+    parser.add_argument("--vllm-start-poll-sec", type=int, default=None, help="Polling interval in seconds while waiting for vLLM startup")
+    parser.add_argument(
+        "--vllm-runtime-mode",
+        choices=["external", "managed"],
+        default=None,
+        help=(
+            "external only calls a manually started fixed-endpoint vLLM; "
+            "managed lets the pipeline start, stop, and switch vLLM"
+        ),
+    )
     args = parser.parse_args(argv)
 
     root = _project_root()
@@ -554,6 +659,37 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         or root / "outputs"
     )
     dataset_name = args.dataset_name or os.environ.get("DATASET_NAME") or input_path.stem
+    vllm_runtime_mode = (
+        args.vllm_runtime_mode
+        or os.environ.get("VLLM_RUNTIME_MODE")
+        or "managed"
+    )
+    if args.vllm_start_timeout_sec is None:
+        if vllm_runtime_mode == "external":
+            vllm_start_timeout_sec = _parse_int_env(
+                "VLLM_EXTERNAL_WAIT_TIMEOUT",
+                default=-1,
+            )
+        else:
+            vllm_start_timeout_sec = _parse_int_env(
+                "VLLM_START_TIMEOUT",
+                default=600,
+            )
+    else:
+        vllm_start_timeout_sec = args.vllm_start_timeout_sec
+    if args.vllm_start_poll_sec is None:
+        if vllm_runtime_mode == "external":
+            vllm_start_poll_sec = _parse_int_env(
+                "VLLM_EXTERNAL_POLL_SEC",
+                default=5,
+            )
+        else:
+            vllm_start_poll_sec = _parse_int_env(
+                "VLLM_START_POLL_SEC",
+                default=5,
+            )
+    else:
+        vllm_start_poll_sec = args.vllm_start_poll_sec
 
     outputs = run_pipeline(
         input_path=str(input_path),
@@ -579,8 +715,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         synthesis_max_per_seed=args.synthesis_max_per_seed,
         synthesis_balance_lambda=args.synthesis_balance_lambda,
         run_validation=False if args.skip_validation else None,
-        vllm_start_timeout_sec=args.vllm_start_timeout_sec,
-        vllm_start_poll_sec=args.vllm_start_poll_sec,
+        vllm_start_timeout_sec=vllm_start_timeout_sec,
+        vllm_start_poll_sec=vllm_start_poll_sec,
+        vllm_runtime_mode=vllm_runtime_mode,
     )
     print(json.dumps(outputs, ensure_ascii=False, indent=2))
     return 0

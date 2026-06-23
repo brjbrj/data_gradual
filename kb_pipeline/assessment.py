@@ -767,6 +767,20 @@ async def _evaluate_answers_async(
         "SCORE_RETRY_DELAY",
         default=1.0,
     )
+    progress_interval = max(
+        1.0,
+        _parse_float_env(
+            "SCORE_PROGRESS_INTERVAL",
+            default=5.0,
+        ),
+    )
+    progress_every = max(
+        1,
+        _parse_int_env(
+            "SCORE_PROGRESS_EVERY",
+            default=5,
+        ),
+    )
     min_tokens = max(
         64,
         _parse_int_env("SCORE_MIN_TOKENS", default=256),
@@ -899,7 +913,9 @@ async def _evaluate_answers_async(
         f"concurrency={workers} thinking={enable_thinking} "
         f"force_json={force_json} "
         f"fallback={fallback_on_exhausted} "
-        f"max_tokens_cap={max_tokens_cap}",
+        f"max_tokens_cap={max_tokens_cap} "
+        f"progress_every={progress_every} "
+        f"progress_interval={progress_interval:g}s",
         flush=True,
     )
 
@@ -974,49 +990,109 @@ async def _evaluate_answers_async(
                 f"requests={len(pending)}",
                 flush=True,
             )
-            tasks = [
+            tasks = {
                 asyncio.create_task(
                     evaluate_signature(signature)
                 )
                 for signature in pending
-            ]
+            }
             next_pending: List[str] = []
             round_done = 0
-            for task in asyncio.as_completed(tasks):
-                signature, report, error = await task
-                round_done += 1
-                if report is None:
-                    last_errors[signature] = error
-                    next_pending.append(signature)
-                else:
-                    report_by_signature[signature] = report
-                    for index in signature_groups[signature]:
-                        if outputs[index] is not None:
-                            continue
-                        cloned = _clone_step_evaluation(
-                            report,
-                            answer_records[index],
-                        )
-                        outputs[index] = cloned
-                        save_report(cloned)
-                        completed += 1
-                if _should_log_progress(round_done, len(tasks)):
-                    elapsed = time.time() - started_at
-                    rate = completed / elapsed if elapsed > 0 else 0.0
-                    eta = (
-                        (total - completed) / rate
-                        if rate > 0
+            round_ok = 0
+            round_errors = 0
+            round_started_at = time.time()
+            last_log_at = round_started_at
+            pending_tasks = tasks
+            while pending_tasks:
+                done_tasks, pending_tasks = await asyncio.wait(
+                    pending_tasks,
+                    timeout=progress_interval,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                now = time.time()
+                if not done_tasks:
+                    elapsed = now - round_started_at
+                    rate = (
+                        round_done / elapsed
+                        if elapsed > 0
                         else 0.0
+                    )
+                    eta = (
+                        _format_seconds(
+                            (len(tasks) - round_done) / rate
+                        )
+                        if rate > 0
+                        else "--:--"
+                    )
+                    print(
+                        f"[score] round={round_index} "
+                        f"heartbeat {round_done}/{len(tasks)} "
+                        f"({round_done / len(tasks) * 100:5.1f}%) "
+                        f"records={completed}/{total} "
+                        f"ok={round_ok} error={round_errors} "
+                        f"active={len(pending_tasks)} "
+                        f"rate={rate:.2f}/s "
+                        f"elapsed={_format_seconds(elapsed)} "
+                        f"eta={eta}",
+                        flush=True,
+                    )
+                    last_log_at = now
+                    continue
+
+                for task in done_tasks:
+                    signature, report, error = task.result()
+                    round_done += 1
+                    if report is None:
+                        last_errors[signature] = error
+                        next_pending.append(signature)
+                        round_errors += 1
+                    else:
+                        report_by_signature[signature] = report
+                        round_ok += 1
+                        for index in signature_groups[signature]:
+                            if outputs[index] is not None:
+                                continue
+                            cloned = _clone_step_evaluation(
+                                report,
+                                answer_records[index],
+                            )
+                            outputs[index] = cloned
+                            save_report(cloned)
+                            completed += 1
+
+                should_log = (
+                    round_done <= 5
+                    or round_done % progress_every == 0
+                    or round_done == len(tasks)
+                    or now - last_log_at >= progress_interval
+                )
+                if should_log:
+                    elapsed = now - round_started_at
+                    rate = (
+                        round_done / elapsed
+                        if elapsed > 0
+                        else 0.0
+                    )
+                    eta = (
+                        _format_seconds(
+                            (len(tasks) - round_done) / rate
+                        )
+                        if rate > 0
+                        else "--:--"
                     )
                     print(
                         f"[score] round={round_index} "
                         f"{round_done}/{len(tasks)} "
+                        f"({round_done / len(tasks) * 100:5.1f}%) "
                         f"records={completed}/{total} "
-                        f"failed={len(next_pending)} "
+                        f"ok={round_ok} error={round_errors} "
+                        f"active={len(pending_tasks)} "
+                        f"rate={rate:.2f}/s "
                         f"elapsed={_format_seconds(elapsed)} "
-                        f"eta={_format_seconds(eta)}",
+                        f"eta={eta}",
                         flush=True,
                     )
+                    last_log_at = now
 
             pending = next_pending
             if pending:

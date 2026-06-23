@@ -231,16 +231,14 @@ def _normalize_generation_payload(payload: Any) -> Dict[str, Any]:
 
 def _extract_generation_fields(parsed: Dict[str, Any], target: Dict[str, Any]) -> Dict[str, Any]:
     question = normalize_whitespace(parsed.get("question") or "")
-    solution_steps_text = normalize_whitespace(
-        parsed.get("solution") or parsed.get("solution_steps") or parsed.get("reasoning_brief") or ""
-    )
+    solution_steps_text = normalize_whitespace(parsed.get("solution_steps") or "")
     steps = parsed.get("steps", [])
     if not isinstance(steps, list):
         steps = []
     normalized_steps = [normalize_whitespace(str(step)) for step in steps if normalize_whitespace(str(step))]
     if not normalized_steps and solution_steps_text:
         normalized_steps = [line.strip() for line in solution_steps_text.splitlines() if line.strip()]
-    solution = normalize_whitespace(parsed.get("solution") or parsed.get("solution_steps") or solution_steps_text or "")
+    solution = normalize_whitespace(parsed.get("solution") or parsed.get("reasoning_brief") or solution_steps_text or "")
     answer = normalize_whitespace(parsed.get("final_answer") or parsed.get("answer") or "")
     difficulty_bucket = normalize_whitespace(parsed.get("difficulty_bucket") or target["bucket"])
     try:
@@ -266,7 +264,7 @@ def _extract_generation_fields(parsed: Dict[str, Any], target: Dict[str, Any]) -
 
 
 def _generation_max_tokens() -> int:
-    return max(128, _parse_int_env("GEN_MAX_TOKENS", default=640))
+    return max(128, _parse_int_env("GEN_MAX_TOKENS", default=900))
 
 
 def project_generation_record(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -372,7 +370,7 @@ class QuestionGenerator:
         attempt = 0
         while infinite_retries or attempt <= retries:
             try:
-                response_format = {"type": "json_object"} if _parse_bool_env("GEN_FORCE_JSON", default=True) else None
+                response_format = {"type": "json_object"} if _parse_bool_env("GEN_FORCE_JSON", default=False) else None
                 raw = self.client.chat(
                     messages,
                     temperature=sampling["temperature"],
@@ -392,8 +390,8 @@ class QuestionGenerator:
                 missing_fields = []
                 if not question:
                     missing_fields.append("question")
-                if not solution and not normalized_steps:
-                    missing_fields.append("solution")
+                if not normalized_steps:
+                    missing_fields.append("steps")
                 if not answer:
                     missing_fields.append("answer")
                 if missing_fields:
@@ -513,7 +511,7 @@ def generate_questions(
     total = len(plan_cards)
     started_at = time.time()
     workers = _resolve_workers(max_concurrency, "GEN_CONCURRENCY", default=256)
-    workers = min(workers, _parse_int_env("GEN_CONCURRENCY_CAP", default=256))
+    workers = min(workers, _parse_int_env("GEN_CONCURRENCY_CAP", default=64))
     if total == 0:
         return []
     outputs: List[Optional[Dict[str, Any]]] = [None] * total

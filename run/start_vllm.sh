@@ -10,6 +10,7 @@ fi
 
 BACKGROUND=0
 DRY_RUN=0
+MODEL_OVERRIDE=""
 PID_FILE="${VLLM_PID_FILE:-${ROOT_DIR}/outputs/runtime/vllm.pid}"
 LOG_FILE="${VLLM_LOG_FILE:-${ROOT_DIR}/outputs/runtime/vllm.log}"
 while [[ $# -gt 0 ]]; do
@@ -26,6 +27,10 @@ while [[ $# -gt 0 ]]; do
       LOG_FILE="$2"
       shift 2
       ;;
+    --model)
+      MODEL_OVERRIDE="$2"
+      shift 2
+      ;;
     --dry-run)
       DRY_RUN=1
       shift
@@ -36,11 +41,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-MODEL_NAME="${VLLM_MODEL:-${OPENAI_MODEL:-/root/brjverl/models/Qwen3.6-27B}}"
+MODEL_NAME="${MODEL_OVERRIDE:-${VLLM_MODEL:-${OPENAI_MODEL:-/root/brjverl/models/Qwen3.6-27B}}}"
 CONDA_ENV_NAME="${VLLM_CONDA_ENV:-${DEFAULT_VLLM_CONDA_ENV:-qwen}}"
 VLLM_PYTHON_BIN="${VLLM_PYTHON:-}"
+API_KEY="${VLLM_API_KEY:-EMPTY}"
 HOST="${VLLM_HOST:-0.0.0.0}"
-PORT="${VLLM_PORT:-8911}"
+# VLLM_PORT is also consumed internally by older vLLM releases. Prefer the
+# project-specific name while retaining the old setting as a compatibility
+# fallback, then remove both variables before launching the server.
+PORT="${VLLM_API_PORT:-${VLLM_PORT:-8911}}"
 TP="${VLLM_TP:-2}"
 MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-8192}"
 GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
@@ -48,6 +57,8 @@ ENABLE_AUTO_TOOL_CHOICE="${VLLM_ENABLE_AUTO_TOOL_CHOICE:-1}"
 TOOL_CALL_PARSER="${VLLM_TOOL_CALL_PARSER:-hermes}"
 ENFORCE_EAGER="${VLLM_ENFORCE_EAGER:-0}"
 DISABLE_CUSTOM_ALL_REDUCE="${VLLM_DISABLE_CUSTOM_ALL_REDUCE:-0}"
+FOREGROUND_LOG="${VLLM_FOREGROUND_LOG:-1}"
+LOG_APPEND="${VLLM_LOG_APPEND:-0}"
 
 CUDA_VISIBLE_DEVICES_VALUE="${VLLM_CUDA_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-0,1}}"
 NCCL_P2P_DISABLE_VALUE="${VLLM_NCCL_P2P_DISABLE:-${NCCL_P2P_DISABLE:-1}}"
@@ -143,6 +154,9 @@ CMD=("${VLLM_PYTHON_BIN}" -m vllm.entrypoints.openai.api_server
   --trust-remote-code
 )
 
+if [[ -n "${API_KEY}" ]]; then
+  CMD+=(--api-key "${API_KEY}")
+fi
 if is_enabled "${ENABLE_AUTO_TOOL_CHOICE}"; then
   CMD+=(--enable-auto-tool-choice)
   if [[ -n "${TOOL_CALL_PARSER}" ]]; then
@@ -163,14 +177,88 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   exit 0
 fi
 
-pkill -f "vllm.entrypoints.openai.api_server" >/dev/null 2>&1 || true
+# These names configure this project's launcher. Older vLLM releases also use
+# some of them internally (notably VLLM_PORT), which can make the engine select
+# an unexpected worker port. All effective server values are already carried
+# by explicit CLI flags above.
+unset \
+  VLLM_MODEL \
+  VLLM_BASE_URL \
+  VLLM_API_KEY \
+  VLLM_RUNTIME_MODE \
+  VLLM_START_TIMEOUT \
+  VLLM_START_POLL_SEC \
+  VLLM_EXTERNAL_WAIT_TIMEOUT \
+  VLLM_EXTERNAL_POLL_SEC \
+  VLLM_LOG_FILE \
+  VLLM_FOREGROUND_LOG \
+  VLLM_LOG_APPEND \
+  VLLM_HOST \
+  VLLM_API_PORT \
+  VLLM_PORT \
+  VLLM_TP \
+  VLLM_MAX_MODEL_LEN \
+  VLLM_GPU_MEMORY_UTILIZATION \
+  VLLM_TIMEOUT \
+  VLLM_MAX_RETRIES \
+  VLLM_CONDA_ENV \
+  VLLM_PYTHON \
+  VLLM_ENABLE_AUTO_TOOL_CHOICE \
+  VLLM_TOOL_CALL_PARSER \
+  VLLM_ENFORCE_EAGER \
+  VLLM_DISABLE_CUSTOM_ALL_REDUCE \
+  VLLM_CUDA_VISIBLE_DEVICES \
+  VLLM_NCCL_P2P_DISABLE \
+  VLLM_NCCL_IB_DISABLE \
+  VLLM_NCCL_DEBUG \
+  VLLM_NCCL_SOCKET_IFNAME \
+  VLLM_NCCL_BLOCKING_WAIT \
+  VLLM_TORCH_NCCL_BLOCKING_WAIT \
+  VLLM_NCCL_ALGO \
+  VLLM_NCCL_P2P_LEVEL \
+  VLLM_NCCL_PXN_DISABLE \
+  VLLM_NCCL_CUMEM_ENABLE \
+  VLLM_GLOO_SOCKET_IFNAME \
+  VLLM_HOST_IP_CONFIG
+unset VLLM_PID_FILE VLLM_MODEL_FILE
+
+if [[ -f "${PID_FILE}" ]]; then
+  "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}"
+elif pgrep -f "vllm.entrypoints.openai.api_server" >/dev/null 2>&1; then
+  echo "[start_vllm] an unmanaged vLLM API server is already running." >&2
+  echo "[start_vllm] stop it explicitly before starting another model." >&2
+  exit 1
+fi
 
 if [[ "${BACKGROUND}" -eq 1 ]]; then
-  nohup "${CMD[@]}" >"${LOG_FILE}" 2>&1 &
-  echo $! > "${PID_FILE}"
+  # A dedicated session lets stop_vllm terminate the API server and every
+  # multiprocessing worker as one process group during model switches.
+  if command -v setsid >/dev/null 2>&1; then
+    nohup setsid "${CMD[@]}" >"${LOG_FILE}" 2>&1 &
+    SERVER_PID=$!
+    echo "${SERVER_PID}" > "${PID_FILE}.pgid"
+  else
+    nohup "${CMD[@]}" >"${LOG_FILE}" 2>&1 &
+    SERVER_PID=$!
+    rm -f "${PID_FILE}.pgid"
+  fi
+  echo "${SERVER_PID}" > "${PID_FILE}"
   printf '%s\n' "${MODEL_NAME}" > "${MODEL_FILE}"
   echo "${PID_FILE}"
   exit 0
+fi
+
+if is_enabled "${FOREGROUND_LOG}"; then
+  echo "[start_vllm] foreground log: ${LOG_FILE}" >&2
+  set +e
+  if is_enabled "${LOG_APPEND}"; then
+    "${CMD[@]}" 2>&1 | tee -a "${LOG_FILE}"
+  else
+    "${CMD[@]}" 2>&1 | tee "${LOG_FILE}"
+  fi
+  STATUS=${PIPESTATUS[0]}
+  set -e
+  exit "${STATUS}"
 fi
 
 exec "${CMD[@]}"

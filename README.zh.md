@@ -340,6 +340,62 @@ VLLM_NCCL_BLOCKING_WAIT=1
 bash run/start_vllm.sh --dry-run
 ```
 
+默认使用流水线自动管理模式：
+
+```bash
+VLLM_RUNTIME_MODE=managed
+VLLM_BASE_URL=http://127.0.0.1:8911/v1
+VLLM_API_PORT=8911
+VLLM_START_TIMEOUT=600
+VLLM_START_POLL_SEC=5
+```
+
+在 `managed` 模式下，流水线自动启动被测模型，回答完成后关闭该 vLLM，
+再在同一个 `8911` 端口启动评测/生成模型。所有客户端请求始终发送到
+`VLLM_BASE_URL`，不会为不同阶段配置多个外部 API 端口。
+
+所有数据集共用 `outputs/runtime/vllm/` 中的 PID、模型标记和 vLLM 日志，
+避免切换数据集名称后把同一个自动启动服务误判为外部进程。请勿同时启动两条
+完整流水线争用同一个端口。
+
+日志也可以在配置文件中统一设置：
+
+```bash
+VLLM_LOG_FILE=/root/brjverl/data_gradual_new/outputs/runtime/vllm.log
+VLLM_FOREGROUND_LOG=1
+VLLM_LOG_APPEND=0
+```
+
+- `VLLM_FOREGROUND_LOG=1`：终端实时显示日志，同时写入文件。
+- `VLLM_LOG_APPEND=0`：每次启动覆盖旧日志；设为 `1` 时追加。
+
+在部署服务器启动被测模型：
+
+```bash
+bash run/start_vllm.sh \
+  --model /root/brjverl/models/Meta-Llama-3-8B-Instruct
+```
+
+切换到评测/生成模型：
+
+```bash
+bash run/start_vllm.sh \
+  --model /root/brjverl/models/Qwen3.6-27B
+```
+
+这两个命令都会读取 `config/pipeline.env` 中的 Python 环境、GPU、NCCL、
+端口和日志设置，并在前台运行；按 `Ctrl+C` 停止。
+
+如果需要改为手动启动 vLLM，可选用：
+
+```bash
+VLLM_RUNTIME_MODE=external
+VLLM_EXTERNAL_WAIT_TIMEOUT=-1
+```
+
+`managed` 是默认模式。vLLM 0.8.x 中不要导出 `VLLM_PORT`，因为该变量也会
+被 vLLM 用于内部 Worker 通信。
+
 - `validation_reports.jsonl`：每轮预检、盲解、审计和最终决策。
 - `validation.failed.jsonl`：当前最终未通过的题目。
 - `repair_history.jsonl`：每次修正前后内容、错误原因和原始响应。

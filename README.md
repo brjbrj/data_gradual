@@ -86,6 +86,8 @@ and output paths must also match the new machine.
 The default profile preserves the current deployed server behavior:
 
 ```bash
+VLLM_BASE_URL=http://127.0.0.1:8911/v1
+VLLM_API_PORT=8911
 VLLM_ENFORCE_EAGER=0
 VLLM_ENABLE_AUTO_TOOL_CHOICE=1
 VLLM_TOOL_CALL_PARSER=hermes
@@ -108,6 +110,49 @@ vLLM:
 ```bash
 bash run/start_vllm.sh --dry-run
 ```
+
+The default runtime lets the pipeline manage vLLM on one fixed API port:
+
+```bash
+VLLM_RUNTIME_MODE=managed
+VLLM_BASE_URL=http://127.0.0.1:8911/v1
+VLLM_API_PORT=8911
+VLLM_START_TIMEOUT=600
+VLLM_START_POLL_SEC=5
+```
+
+In `managed` mode, the pipeline starts the victim model, stops it after the
+answering stage, and starts the evaluator/generator model on the same port
+`8911`. Every client request continues to use the single configured
+`VLLM_BASE_URL`.
+
+All datasets share `outputs/runtime/vllm/` for the managed PID, model marker,
+and server log. This prevents a dataset-name change from misclassifying the
+same managed service as an external process. Do not run two full pipelines
+concurrently against the same managed port.
+
+Foreground logging is configurable:
+
+```bash
+VLLM_LOG_FILE=/root/brjverl/data_gradual_new/outputs/runtime/vllm.log
+VLLM_FOREGROUND_LOG=1
+VLLM_LOG_APPEND=0
+```
+
+Start a configured model while keeping vLLM attached to the terminal:
+
+```bash
+bash run/start_vllm.sh \
+  --model /root/brjverl/models/Meta-Llama-3-8B-Instruct
+```
+
+The terminal still displays output, the configured log file receives the same
+output, and `Ctrl+C` stops the server.
+
+Manual external mode remains available through `VLLM_RUNTIME_MODE=external`.
+`VLLM_API_PORT` is used by the managed launcher.
+Do not export `VLLM_PORT` on vLLM 0.8.x because vLLM also uses that variable
+for internal worker communication.
 
 ## Validation design
 
