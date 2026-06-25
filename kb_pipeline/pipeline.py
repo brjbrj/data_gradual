@@ -28,6 +28,26 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _load_pipeline_env_if_needed() -> None:
+    if os.environ.get("PIPELINE_CONFIG_LOADED") == "1":
+        return
+    root = _project_root()
+    for path in [root / "config" / "pipeline.env", root / "config" / "pipeline.example.env"]:
+        if not path.exists():
+            continue
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+            os.environ[key] = value.strip().strip("'\"")
+        os.environ["PIPELINE_CONFIG_LOADED"] = "1"
+        return
+
+
 def _log(message: str) -> None:
     print(message, flush=True)
 
@@ -44,6 +64,7 @@ class VLLMManager:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.pid_file = self.runtime_dir / "vllm.pid"
         self.log_file = self.runtime_dir / "vllm.log"
+        self.python_file = self.runtime_dir / "vllm.python"
         self.current_model: Optional[str] = None
         self.owned: bool = False
         self.runtime_mode = str(runtime_mode).strip().lower()
@@ -76,6 +97,18 @@ class VLLMManager:
         return normalize_whitespace(running).rstrip("/") == normalize_whitespace(
             expected
         ).rstrip("/")
+
+    def _registered_python_matches_config(self) -> bool:
+        expected = normalize_whitespace(os.environ.get("VLLM_PYTHON", ""))
+        if not expected:
+            return True
+        try:
+            actual = normalize_whitespace(
+                self.python_file.read_text(encoding="utf-8", errors="replace")
+            )
+        except OSError:
+            return False
+        return Path(actual).resolve() == Path(expected).resolve()
 
     def _wait_for_external_model(self, model: str) -> None:
         base_url = os.environ.get(
@@ -161,10 +194,21 @@ class VLLMManager:
             return
         running = self.probe()
         if self._models_match(running, model):
-            self.current_model = model
-            self.owned = False
-            _log(f"[vLLM] reusing existing model: {model}")
-            return
+            if self.pid_file.exists() and self._registered_python_matches_config():
+                self.current_model = model
+                self.owned = True
+                _log(f"[vLLM] reusing managed model: {model}")
+                return
+            _log(
+                "[vLLM] running model matches, but it was not started with "
+                "the configured managed runtime; restarting it"
+            )
+            self.stop(force=True)
+            for _ in range(30):
+                time.sleep(1)
+                if self.probe() is None:
+                    _log("[vLLM] old model stopped, ready to launch configured runtime")
+                    break
         if running and running != model:
             _log(f"[vLLM] stopping mismatched model: {running}")
             self.stop(force=True)
@@ -334,6 +378,7 @@ def run_pipeline(
     vllm_start_poll_sec: int = 5,
     vllm_runtime_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
+    _load_pipeline_env_if_needed()
     root = _project_root()
     input_path = str(input_path)
     output_dir_path = Path(output_dir)
@@ -604,10 +649,15 @@ def run_pipeline(
         _log("[pipeline] done")
         return outputs
     finally:
-        runtime.stop()
+        # Ctrl+C can arrive while a managed vLLM launch is still warming up,
+        # before ``owned`` is marked true. If start_vllm.sh has already written
+        # its PID file, force cleanup so that process group is still torn down,
+        # while avoiding unrelated unmanaged vLLM services that were only probed.
+        runtime.stop(force=runtime.owned or runtime.pid_file.exists())
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    _load_pipeline_env_if_needed()
     parser = argparse.ArgumentParser(description="Run the full gradual data synthesis pipeline.")
     parser.add_argument("--input", required=False, help="Input dataset JSONL path")
     parser.add_argument("--output-dir", required=False, help="Output directory")

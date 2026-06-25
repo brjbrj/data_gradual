@@ -108,7 +108,13 @@ if [[ -n "${VLLM_PYTHON_BIN}" ]]; then
     echo "[start_vllm] VLLM_PYTHON is not executable: ${VLLM_PYTHON_BIN}" >&2
     exit 1
   fi
+  VLLM_ENV_PREFIX="$(cd "$(dirname "${VLLM_PYTHON_BIN}")/.." && pwd)"
+  export CONDA_PREFIX="${VLLM_ENV_PREFIX}"
+  export CONDA_DEFAULT_ENV="$(basename "${VLLM_ENV_PREFIX}")"
+  export PATH="${VLLM_ENV_PREFIX}/bin:${PATH}"
+  unset PYTHONHOME
   echo "[start_vllm] using configured Python: ${VLLM_PYTHON_BIN}" >&2
+  echo "[start_vllm] configured Python env prefix: ${VLLM_ENV_PREFIX}" >&2
 else
   if [[ -z "${CONDA_ENV_NAME}" ]]; then
     VLLM_PYTHON_BIN="$(command -v python)"
@@ -143,6 +149,7 @@ apply_env_setting "VLLM_HOST_IP" "${VLLM_HOST_IP_VALUE}"
 mkdir -p "$(dirname "${PID_FILE}")"
 mkdir -p "$(dirname "${LOG_FILE}")"
 MODEL_FILE="${VLLM_MODEL_FILE:-${PID_FILE%.pid}.model}"
+PYTHON_FILE="${VLLM_PYTHON_FILE:-${PID_FILE%.pid}.python}"
 
 CMD=("${VLLM_PYTHON_BIN}" -m vllm.entrypoints.openai.api_server
   --model "${MODEL_NAME}"
@@ -221,6 +228,7 @@ unset \
   VLLM_GLOO_SOCKET_IFNAME \
   VLLM_HOST_IP_CONFIG
 unset VLLM_PID_FILE VLLM_MODEL_FILE
+unset VLLM_PYTHON_FILE
 
 if [[ -f "${PID_FILE}" ]]; then
   "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}"
@@ -244,6 +252,7 @@ if [[ "${BACKGROUND}" -eq 1 ]]; then
   fi
   echo "${SERVER_PID}" > "${PID_FILE}"
   printf '%s\n' "${MODEL_NAME}" > "${MODEL_FILE}"
+  printf '%s\n' "${VLLM_PYTHON_BIN}" > "${PYTHON_FILE}"
   echo "${PID_FILE}"
   exit 0
 fi
@@ -251,12 +260,46 @@ fi
 if is_enabled "${FOREGROUND_LOG}"; then
   echo "[start_vllm] foreground log: ${LOG_FILE}" >&2
   set +e
-  if is_enabled "${LOG_APPEND}"; then
-    "${CMD[@]}" 2>&1 | tee -a "${LOG_FILE}"
-  else
-    "${CMD[@]}" 2>&1 | tee "${LOG_FILE}"
+  if ! is_enabled "${LOG_APPEND}"; then
+    : > "${LOG_FILE}"
   fi
-  STATUS=${PIPESTATUS[0]}
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "${CMD[@]}" >>"${LOG_FILE}" 2>&1 &
+    SERVER_PID=$!
+    echo "${SERVER_PID}" > "${PID_FILE}.pgid"
+  else
+    "${CMD[@]}" >>"${LOG_FILE}" 2>&1 &
+    SERVER_PID=$!
+    rm -f "${PID_FILE}.pgid"
+  fi
+  echo "${SERVER_PID}" > "${PID_FILE}"
+  printf '%s\n' "${MODEL_NAME}" > "${MODEL_FILE}"
+  printf '%s\n' "${VLLM_PYTHON_BIN}" > "${PYTHON_FILE}"
+
+  if is_enabled "${LOG_APPEND}"; then
+    tail -n 0 -F "${LOG_FILE}" &
+  else
+    tail -n +1 -F "${LOG_FILE}" &
+  fi
+  TAIL_PID=$!
+
+  cleanup_foreground() {
+    local status="${1:-$?}"
+    trap - INT TERM EXIT
+    kill "${TAIL_PID}" >/dev/null 2>&1 || true
+    "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}" >/dev/null 2>&1 || true
+    exit "${status}"
+  }
+
+  trap 'cleanup_foreground 130' INT
+  trap 'cleanup_foreground 143' TERM
+  trap 'cleanup_foreground $?' EXIT
+
+  wait "${SERVER_PID}"
+  STATUS=$?
+  trap - INT TERM EXIT
+  kill "${TAIL_PID}" >/dev/null 2>&1 || true
+  "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}" >/dev/null 2>&1 || true
   set -e
   exit "${STATUS}"
 fi

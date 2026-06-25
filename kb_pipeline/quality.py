@@ -171,29 +171,14 @@ def _repair_candidate(
         "source": source,
         "candidate": candidate,
     }
-    prompt[1]["content"] = json.dumps(
-        {
-            "task": "Repair the candidate while preserving the intended difficulty.",
-            "issues": list(issues),
-            "suggestions": list(suggestions),
-            "target": target,
-            "source": source,
-            "candidate": candidate,
-            "output_schema": {
-                "question": "string",
-                "solution_steps": "string",
-                "answer": "string",
-                "difficulty_bucket": "easy|medium|hard|very_hard",
-                "step_count": "integer",
-                "repair_notes": "string",
-            },
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
     raw = client.chat(prompt, temperature=0.15, top_p=0.9, max_tokens=1100)
     parsed = safe_json_from_text(raw) or {}
-    solution_steps = normalize_whitespace(parsed.get("solution_steps") or parsed.get("solution") or candidate.get("solution_steps", "") or candidate.get("solution", ""))
+    solution_steps = normalize_whitespace(
+        parsed.get("solution")
+        or parsed.get("solution_steps")
+        or candidate.get("solution_steps", "")
+        or candidate.get("solution", "")
+    )
     repaired = {
         "question": normalize_whitespace(parsed.get("question") or candidate.get("question", "")),
         "solution": solution_steps,

@@ -50,7 +50,7 @@ if [[ -n "${PID_FILE}" && -f "${PID_FILE}" ]]; then
     CMDLINE="$(tr '\0' ' ' < "/proc/${PID}/cmdline" 2>/dev/null || true)"
     if [[ "${CMDLINE}" != *"vllm.entrypoints.openai.api_server"* ]]; then
       echo "[stop_vllm] stale PID file ignored; PID ${PID} is not vLLM" >&2
-      rm -f "${PID_FILE}" "${PID_FILE}.pgid" "${PID_FILE%.pid}.model"
+      rm -f "${PID_FILE}" "${PID_FILE}.pgid" "${PID_FILE%.pid}.model" "${PID_FILE%.pid}.python"
       exit 0
     fi
 
@@ -75,7 +75,7 @@ if [[ -n "${PID_FILE}" && -f "${PID_FILE}" ]]; then
       fi
     fi
   fi
-  rm -f "${PID_FILE}" "${PID_FILE}.pgid" "${PID_FILE%.pid}.model"
+  rm -f "${PID_FILE}" "${PID_FILE}.pgid" "${PID_FILE%.pid}.model" "${PID_FILE%.pid}.python"
 else
   # Compatibility fallback for servers started before process-group tracking.
   API_PIDS="$(pgrep -f "vllm.entrypoints.openai.api_server" || true)"
