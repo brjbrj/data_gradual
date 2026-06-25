@@ -152,7 +152,7 @@ mkdir -p "$(dirname "${LOG_FILE}")"
 MODEL_FILE="${VLLM_MODEL_FILE:-${PID_FILE%.pid}.model}"
 PYTHON_FILE="${VLLM_PYTHON_FILE:-${PID_FILE%.pid}.python}"
 
-VLLM_VERSION_INFO="$("${VLLM_PYTHON_BIN}" -c 'import sys, vllm; print(f"executable={sys.executable}"); print(f"vllm_version={getattr(vllm, \"__version__\", \"unknown\")}")')"
+VLLM_VERSION_INFO="$("${VLLM_PYTHON_BIN}" -c 'import sys, vllm; print("executable=%s" % sys.executable); print("vllm_version=%s" % getattr(vllm, "__version__", "unknown"))')"
 echo "[start_vllm] python/vllm probe:" >&2
 printf '%s\n' "${VLLM_VERSION_INFO}" | sed 's/^/[start_vllm]   /' >&2
 if [[ -n "${VLLM_EXPECTED_VERSION:-}" ]]; then
