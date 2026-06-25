@@ -112,7 +112,8 @@ if [[ -n "${VLLM_PYTHON_BIN}" ]]; then
   export CONDA_PREFIX="${VLLM_ENV_PREFIX}"
   export CONDA_DEFAULT_ENV="$(basename "${VLLM_ENV_PREFIX}")"
   export PATH="${VLLM_ENV_PREFIX}/bin:${PATH}"
-  unset PYTHONHOME
+  export PYTHONNOUSERSITE=1
+  unset PYTHONHOME PYTHONPATH PYTHONUSERBASE VIRTUAL_ENV
   echo "[start_vllm] using configured Python: ${VLLM_PYTHON_BIN}" >&2
   echo "[start_vllm] configured Python env prefix: ${VLLM_ENV_PREFIX}" >&2
 else
@@ -150,6 +151,17 @@ mkdir -p "$(dirname "${PID_FILE}")"
 mkdir -p "$(dirname "${LOG_FILE}")"
 MODEL_FILE="${VLLM_MODEL_FILE:-${PID_FILE%.pid}.model}"
 PYTHON_FILE="${VLLM_PYTHON_FILE:-${PID_FILE%.pid}.python}"
+
+VLLM_VERSION_INFO="$("${VLLM_PYTHON_BIN}" -c 'import sys, vllm; print(f"executable={sys.executable}"); print(f"vllm_version={getattr(vllm, \"__version__\", \"unknown\")}")')"
+echo "[start_vllm] python/vllm probe:" >&2
+printf '%s\n' "${VLLM_VERSION_INFO}" | sed 's/^/[start_vllm]   /' >&2
+if [[ -n "${VLLM_EXPECTED_VERSION:-}" ]]; then
+  DETECTED_VLLM_VERSION="$(printf '%s\n' "${VLLM_VERSION_INFO}" | awk -F= '/^vllm_version=/{print $2}')"
+  if [[ "${DETECTED_VLLM_VERSION}" != "${VLLM_EXPECTED_VERSION}" ]]; then
+    echo "[start_vllm] expected vLLM ${VLLM_EXPECTED_VERSION}, got ${DETECTED_VLLM_VERSION}" >&2
+    exit 1
+  fi
+fi
 
 CMD=("${VLLM_PYTHON_BIN}" -m vllm.entrypoints.openai.api_server
   --model "${MODEL_NAME}"
@@ -241,12 +253,17 @@ fi
 if [[ "${BACKGROUND}" -eq 1 ]]; then
   # A dedicated session lets stop_vllm terminate the API server and every
   # multiprocessing worker as one process group during model switches.
+  {
+    echo "[start_vllm] using configured Python: ${VLLM_PYTHON_BIN}"
+    echo "[start_vllm] configured Python env prefix: ${CONDA_PREFIX:-<unset>}"
+    printf '%s\n' "${VLLM_VERSION_INFO}" | sed 's/^/[start_vllm]   /'
+  } >"${LOG_FILE}"
   if command -v setsid >/dev/null 2>&1; then
-    nohup setsid "${CMD[@]}" >"${LOG_FILE}" 2>&1 &
+    nohup setsid "${CMD[@]}" >>"${LOG_FILE}" 2>&1 &
     SERVER_PID=$!
     echo "${SERVER_PID}" > "${PID_FILE}.pgid"
   else
-    nohup "${CMD[@]}" >"${LOG_FILE}" 2>&1 &
+    nohup "${CMD[@]}" >>"${LOG_FILE}" 2>&1 &
     SERVER_PID=$!
     rm -f "${PID_FILE}.pgid"
   fi
