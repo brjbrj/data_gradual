@@ -6,8 +6,10 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from .assessment import (
     answer_questions,
@@ -83,27 +85,64 @@ class VLLMManager:
     def _run(self, command: Sequence[str], env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
         return subprocess.run(command, check=True, env=env, cwd=str(_project_root()))
 
-    def probe(self) -> Optional[str]:
-        script = _project_root() / "run" / "probe_vllm.py"
+    def probe_models(self) -> List[str]:
+        base_url = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8911/v1").rstrip("/")
+        api_key = (
+            os.environ.get("VLLM_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+            or "EMPTY"
+        )
+        request = urllib.request.Request(
+            f"{base_url}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            method="GET",
+        )
         try:
-            completed = subprocess.run(
-                [sys.executable, str(script)],
-                cwd=str(_project_root()),
-                check=False,
-                capture_output=True,
-                text=True,
+            with urllib.request.urlopen(request, timeout=5) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            try:
+                body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                body = ""
+            self.last_probe_error = (
+                f"HTTPError status={exc.code} url={base_url}/models body={normalize_whitespace(body)}"
             )
-            if completed.returncode != 0:
-                self.last_probe_error = normalize_whitespace(
-                    completed.stderr or completed.stdout or f"exit={completed.returncode}"
-                )
-                return None
-            model = normalize_whitespace(completed.stdout)
-            self.last_probe_error = ""
-            return model or None
+            return []
+        except urllib.error.URLError as exc:
+            self.last_probe_error = f"URLError url={base_url}/models reason={exc}"
+            return []
+        except json.JSONDecodeError as exc:
+            self.last_probe_error = f"JSONDecodeError url={base_url}/models error={exc}"
+            return []
         except Exception as exc:
             self.last_probe_error = f"{type(exc).__name__}: {exc}"
-            return None
+            return []
+
+        models: List[str] = []
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, list):
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    model = item.get("id") or item.get("name")
+                    if model:
+                        models.append(normalize_whitespace(str(model)))
+            else:
+                model = payload.get("model") or payload.get("name") or payload.get("id")
+                if model:
+                    models.append(normalize_whitespace(str(model)))
+        models = [model for model in models if model]
+        if models:
+            self.last_probe_error = ""
+        else:
+            self.last_probe_error = f"No model id in /models payload: {payload}"
+        return models
+
+    def probe(self) -> Optional[str]:
+        models = self.probe_models()
+        return models[0] if models else None
 
     @staticmethod
     def _model_aliases(model: Optional[str]) -> set[str]:
@@ -121,6 +160,17 @@ class VLLMManager:
     @classmethod
     def _models_match(cls, running: Optional[str], expected: str) -> bool:
         return bool(cls._model_aliases(running) & cls._model_aliases(expected))
+
+    @classmethod
+    def _served_models_match(cls, running_models: Sequence[str], expected: str) -> bool:
+        expected_aliases = cls._model_aliases(expected)
+        return any(cls._model_aliases(model) & expected_aliases for model in running_models)
+
+    @staticmethod
+    def _format_served_models(models: Sequence[str]) -> str:
+        if not models:
+            return "<none>"
+        return "[" + ", ".join(models) + "]"
 
     def _registered_python_matches_config(self) -> bool:
         expected = normalize_whitespace(os.environ.get("VLLM_PYTHON", ""))
@@ -150,15 +200,16 @@ class VLLMManager:
         last_running: Optional[str] = None
         last_progress_log = -30
         while True:
-            running = self.probe()
-            if self._models_match(running, model):
+            running_models = self.probe_models()
+            if self._served_models_match(running_models, model):
                 self.current_model = model
                 self.owned = False
                 _log(f"[vLLM] external service ready: {model}")
                 return
 
+            running = self._format_served_models(running_models)
             if running != last_running:
-                if running:
+                if running_models:
                     _log(
                         f"[vLLM] external service currently serves: {running}; "
                         f"please switch it to: {model}"
@@ -216,8 +267,8 @@ class VLLMManager:
         if self._models_match(self.current_model, model):
             _log(f"[vLLM] already using model: {model}")
             return
-        running = self.probe()
-        if self._models_match(running, model):
+        running_models = self.probe_models()
+        if self._served_models_match(running_models, model):
             if self.pid_file.exists() and self._registered_python_matches_config():
                 self.current_model = model
                 self.owned = True
@@ -230,15 +281,15 @@ class VLLMManager:
             self.stop(force=True)
             for _ in range(30):
                 time.sleep(1)
-                if self.probe() is None:
+                if not self.probe_models():
                     _log("[vLLM] old model stopped, ready to launch configured runtime")
                     break
-        if running and not self._models_match(running, model):
-            _log(f"[vLLM] stopping mismatched model: {running}")
+        if running_models and not self._served_models_match(running_models, model):
+            _log(f"[vLLM] stopping mismatched model: {self._format_served_models(running_models)}")
             self.stop(force=True)
             for _ in range(30):
                 time.sleep(1)
-                if self.probe() is None:
+                if not self.probe_models():
                     _log("[vLLM] old model stopped, ready to launch new model")
                     break
         script = _project_root() / "run" / "start_vllm.sh"
@@ -251,14 +302,17 @@ class VLLMManager:
         total_polls = max(1, self.start_timeout_sec // self.start_poll_sec)
         for poll_idx in range(total_polls):
             time.sleep(self.start_poll_sec)
-            running = self.probe()
-            if self._models_match(running, model):
+            running_models = self.probe_models()
+            if self._served_models_match(running_models, model):
                 self.current_model = model
                 self.owned = True
-                _log(f"[vLLM] ready: {model}")
+                _log(
+                    f"[vLLM] ready: {model} "
+                    f"served={self._format_served_models(running_models)}"
+                )
                 return
             waited = (poll_idx + 1) * self.start_poll_sec
-            running_text = running or "<not ready>"
+            running_text = self._format_served_models(running_models)
             error_text = (
                 f" probe_error={self.last_probe_error}"
                 if self.last_probe_error
@@ -266,7 +320,7 @@ class VLLMManager:
             )
             _log(
                 f"[vLLM] waiting for ready state: {model} "
-                f"running={running_text} "
+                f"served={running_text}"
                 f"{error_text}"
                 f"({waited}s/{self.start_timeout_sec}s)"
             )
