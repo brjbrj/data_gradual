@@ -10,6 +10,10 @@ stage_require_file "${MASTERY_PATH}" "run: bash run/03_score_seed.sh ${DATASET_N
 stage_require_file "${KB_RECORDS_PATH}" "run: bash run/01_build_kb.sh ${DATASET_NAME}"
 stage_require_file "${KB_ENTITIES_PATH}" "run: bash run/01_build_kb.sh ${DATASET_NAME}"
 
+if stage_skip_if_complete "04_build_synthesis_plan" "${PLAN_PATH}" "${PLAN_SUMMARY_PATH}"; then
+  exit 0
+fi
+
 stage_log "04 build_synthesis_plan output=${PLAN_PATH}"
 "${PYTHON_BIN}" "${ROOT_DIR}/run/build_synthesis_plan.py" \
   --mastery "${MASTERY_PATH}" \

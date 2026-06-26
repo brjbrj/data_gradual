@@ -12,6 +12,11 @@ stage_require_file "${PLAN_PATH}" "run: bash run/04_build_synthesis_plan.sh ${DA
 stage_require_file "${MASTERY_PATH}" "run: bash run/03_score_seed.sh ${DATASET_NAME}"
 stage_ensure_vllm "${GEN_MODEL_NAME}" "question generation"
 
+EXTRA_ARGS=()
+if stage_truthy "${STAGE_FORCE:-0}"; then
+  EXTRA_ARGS+=(--no-resume)
+fi
+
 stage_log "05 generate_questions output=${GENERATED_OUTPUT_PATH}"
 "${PYTHON_BIN}" "${ROOT_DIR}/run/generate_questions.py" \
   --plan "${PLAN_PATH}" \
@@ -20,4 +25,6 @@ stage_log "05 generate_questions output=${GENERATED_OUTPUT_PATH}"
   --raw-output "${RAW_OUTPUT_PATH}" \
   --failed-output "${FAILED_OUTPUT_PATH}" \
   --model "${GEN_MODEL_NAME}" \
+  --checkpoint-every "${GEN_CHECKPOINT_EVERY:-50}" \
+  "${EXTRA_ARGS[@]}" \
   "${STAGE_REMAINING_ARGS[@]}"

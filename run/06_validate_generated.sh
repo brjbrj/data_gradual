@@ -13,6 +13,10 @@ stage_require_file "${PLAN_PATH}" "run: bash run/04_build_synthesis_plan.sh ${DA
 stage_require_file "${MASTERY_PATH}" "run: bash run/03_score_seed.sh ${DATASET_NAME}"
 stage_ensure_vllm "${QC_MODEL_NAME}" "validation"
 
+if stage_skip_if_complete "06_validate_generated" "${VALIDATED_OUTPUT_PATH}" "${VALIDATION_REPORTS_PATH}"; then
+  exit 0
+fi
+
 stage_log "06 validate_generated output=${VALIDATED_OUTPUT_PATH}"
 "${PYTHON_BIN}" "${ROOT_DIR}/run/validate_generated.py" \
   --generated "${GENERATED_OUTPUT_PATH}" \

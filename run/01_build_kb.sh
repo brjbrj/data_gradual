@@ -16,5 +16,9 @@ if [[ -n "${SAMPLE_LIMIT:-}" ]]; then
 fi
 ARGS+=("${STAGE_REMAINING_ARGS[@]}")
 
+if stage_skip_if_complete "01_build_kb" "${KB_RECORDS_PATH}" "${KB_ENTITIES_PATH}"; then
+  exit 0
+fi
+
 stage_log "01 build_kb dataset=${DATASET_NAME} input=${INPUT_PATH}"
 "${ARGS[@]}"

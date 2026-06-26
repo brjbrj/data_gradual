@@ -59,6 +59,35 @@ stage_log() {
   echo "[stage] $*" >&2
 }
 
+stage_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|y|Y|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+stage_skip_if_complete() {
+  local label="$1"
+  shift
+  if stage_truthy "${STAGE_FORCE:-0}"; then
+    return 1
+  fi
+  if ! stage_truthy "${STAGE_RESUME:-1}"; then
+    return 1
+  fi
+  local path
+  for path in "$@"; do
+    if [[ ! -s "${path}" ]]; then
+      return 1
+    fi
+  done
+  stage_log "skip ${label}: existing outputs detected; set STAGE_FORCE=1 to rerun"
+  for path in "$@"; do
+    stage_log "  ${path}"
+  done
+  return 0
+}
+
 stage_normalize_model() {
   printf '%s' "${1:-}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s:/*$::'
 }

@@ -12,6 +12,10 @@ stage_require_file "${KB_RECORDS_PATH}" "run: bash run/01_build_kb.sh ${DATASET_
 stage_require_file "${VICTIM_ANSWER_RAW_PATH}" "run: bash run/02_answer_seed.sh ${DATASET_NAME}"
 stage_ensure_vllm "${STEP_MODEL_NAME}" "step scoring"
 
+if stage_skip_if_complete "03_score_seed" "${STEP_EVALUATION_PATH}" "${MASTERY_PATH}"; then
+  exit 0
+fi
+
 stage_log "03 score_seed input=${VICTIM_ANSWER_RAW_PATH} output=${STEP_EVALUATION_PATH}"
 "${PYTHON_BIN}" "${ROOT_DIR}/run/score_seed_answers.py" \
   --input "${VICTIM_ANSWER_RAW_PATH}" \

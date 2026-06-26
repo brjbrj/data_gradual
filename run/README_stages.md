@@ -3,8 +3,6 @@
 These scripts split the full pipeline into independent stages. By default they
 use an externally started vLLM server and do not start, switch, or stop vLLM.
 
-## Defaults
-
 ```bash
 cd /path/to/data_gradual_new
 export STAGE_VLLM_MODE=external
@@ -22,6 +20,48 @@ ${OUTPUT_DIR}/pipeline/${DATASET_NAME}
 
 The vLLM check calls `/v1/models` with `Authorization: Bearer ${VLLM_API_KEY}`.
 It accepts full paths, trailing slashes, and basename-only model IDs as matches.
+
+## Resume Policy
+
+Resume is enabled by default:
+
+```bash
+STAGE_RESUME=1
+```
+
+Use this to force a stage to rebuild/regenerate from scratch:
+
+```bash
+STAGE_FORCE=1 bash run/05_generate_questions.sh gsm8k
+```
+
+Stage behavior:
+
+| Stage | Recovery behavior |
+| --- | --- |
+| `01_build_kb.sh` | Skips if KB records and entities already exist. |
+| `02_answer_seed.sh` | Resumes from existing `victim_answers.raw.jsonl`; saves every `ANSWER_CHECKPOINT_EVERY` answers. |
+| `03_score_seed.sh` | Resumes from `step_evaluations.jsonl.partial`; completed records are appended as scoring finishes. |
+| `04_build_synthesis_plan.sh` | Skips if plan and summary already exist. |
+| `05_generate_questions.sh` | Resumes from existing `generated.jsonl`; skips successful `plan_id`s; saves every `GEN_CHECKPOINT_EVERY` completions. |
+| `06_validate_generated.sh` | Saves canonical validation files after each validation round; skips if validated outputs already exist. |
+| `07_export_training_data.sh` | Skips if train output and summary already exist. |
+
+Useful checkpoint knobs:
+
+```bash
+ANSWER_RESUME=1
+ANSWER_CHECKPOINT_EVERY=50
+SCORE_RESUME=1
+GEN_RESUME=1
+GEN_CHECKPOINT_EVERY=50
+```
+
+Disable resume for long generation only when intentionally regenerating:
+
+```bash
+GEN_RESUME=0 bash run/05_generate_questions.sh gsm8k --no-resume
+```
 
 ## Stages
 
@@ -55,24 +95,6 @@ bash run/04_build_synthesis_plan.sh gsm8k
 bash run/05_generate_questions.sh gsm8k
 ```
 
-Generation resumes by default. It reloads existing `generated.jsonl` and skips
-already successful `plan_id`s. It also refreshes `generated.jsonl`,
-`generated.raw.jsonl`, `generated.failed.jsonl`, and `generated.summary.json`
-periodically while running.
-
-Useful knobs:
-
-```bash
-GEN_RESUME=1
-GEN_CHECKPOINT_EVERY=50
-```
-
-Disable resume only when you intentionally want to regenerate from scratch:
-
-```bash
-GEN_RESUME=0 bash run/05_generate_questions.sh gsm8k --no-resume
-```
-
 6. Validate generated questions, requires `QC_MODEL` already served:
 
 ```bash
@@ -85,7 +107,7 @@ bash run/06_validate_generated.sh gsm8k
 bash run/07_export_training_data.sh gsm8k
 ```
 
-## Managed Mode Optional
+## Optional Managed Mode
 
 If you explicitly want a stage script to start vLLM:
 
@@ -99,7 +121,7 @@ To stop the managed vLLM when the stage exits:
 STAGE_VLLM_MODE=managed STAGE_VLLM_STOP_ON_EXIT=1 bash run/05_generate_questions.sh gsm8k
 ```
 
-## Useful Overrides
+## Common Overrides
 
 ```bash
 DATASET_NAME=gsm8k

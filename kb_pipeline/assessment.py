@@ -394,33 +394,85 @@ def answer_questions(
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
     max_concurrency: Optional[int] = None,
+    existing_records: Optional[Sequence[Dict[str, Any]]] = None,
+    answer_output_path: Optional[Path] = None,
+    answer_raw_output_path: Optional[Path] = None,
+    checkpoint_every: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     answerer = VictimAnswerer(client=client, temperature=temperature, top_p=top_p)
-    total = len(records) * max(1, n_answers)
+    expected_total = len(records) * max(1, n_answers)
     started_at = time.time()
     workers = _resolve_workers(max_concurrency, "ANSWER_CONCURRENCY", default=256)
+    checkpoint_every = (
+        max(1, _parse_int_env("ANSWER_CHECKPOINT_EVERY", default=50))
+        if checkpoint_every is None
+        else max(1, int(checkpoint_every))
+    )
+    existing_by_task_id: Dict[str, Dict[str, Any]] = {}
+    for record in existing_records or []:
+        task_id = str(record.get("task_id") or "")
+        if task_id:
+            existing_by_task_id[task_id] = dict(record)
     tasks: List[Dict[str, Any]] = []
     for record in records:
         for attempt_index in range(n_answers):
-            tasks.append({"record": record, "attempt_index": attempt_index})
+            task_id = f"{record.get('task_id')}_{attempt_index}"
+            if task_id not in existing_by_task_id:
+                tasks.append({"record": record, "attempt_index": attempt_index})
+
+    outputs_by_task_id: Dict[str, Dict[str, Any]] = dict(existing_by_task_id)
+    total = len(tasks)
+    if existing_by_task_id:
+        print(
+            f"[answer] resume enabled: loaded={len(existing_by_task_id)} "
+            f"remaining={total} expected={expected_total}",
+            flush=True,
+        )
+
+    def ordered_outputs() -> List[Dict[str, Any]]:
+        outputs: List[Dict[str, Any]] = []
+        for source_record in records:
+            for attempt_index in range(n_answers):
+                task_id = f"{source_record.get('task_id')}_{attempt_index}"
+                record = outputs_by_task_id.get(task_id)
+                if record is not None:
+                    outputs.append(record)
+        return outputs
+
+    def save_checkpoint(reason: str) -> None:
+        if answer_output_path is None and answer_raw_output_path is None:
+            return
+        outputs = ordered_outputs()
+        if answer_output_path is not None:
+            write_jsonl(answer_output_path, [project_victim_answer_record(record) for record in outputs])
+        if answer_raw_output_path is not None:
+            write_jsonl(answer_raw_output_path, [project_victim_answer_raw_record(record) for record in outputs])
+        print(
+            f"[answer] checkpoint saved reason={reason} "
+            f"records={len(outputs)}/{expected_total}",
+            flush=True,
+        )
 
     if total == 0:
-        return []
+        save_checkpoint("nothing_pending")
+        return ordered_outputs()
 
-    outputs: List[Optional[Dict[str, Any]]] = [None] * total
     done = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, total)) as executor:
         future_to_index = {
-            executor.submit(answerer.answer_one, task["record"], task["attempt_index"]): index
-            for index, task in enumerate(tasks)
+            executor.submit(answerer.answer_one, task["record"], task["attempt_index"]): task
+            for task in tasks
         }
         for future in concurrent.futures.as_completed(future_to_index):
-            index = future_to_index[future]
-            outputs[index] = future.result().__dict__
+            record = future.result().__dict__
+            outputs_by_task_id[str(record.get("task_id"))] = record
             done += 1
+            if done % checkpoint_every == 0:
+                save_checkpoint("periodic")
             if _should_log_progress(done, total):
                 print(_progress_line("[answer]", done, total, started_at), flush=True)
-    return [record for record in outputs if record is not None]
+    save_checkpoint("complete")
+    return ordered_outputs()
 
 
 class StepEvaluator:
@@ -1357,6 +1409,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--step-output", required=False, help="Step evaluation JSONL path")
     parser.add_argument("--mastery-record-output", required=False, help="Detailed mastery JSONL path")
     parser.add_argument("--mastery-output", required=False, help="Mastery JSON path")
+    parser.add_argument("--resume", action="store_true", default=None)
+    parser.add_argument("--no-resume", action="store_false", dest="resume")
+    parser.add_argument("--checkpoint-every", type=int, required=False)
     parser.add_argument("--synthesis-target-multiplier", type=int, required=False)
     parser.add_argument("--synthesis-min-per-seed", type=int, required=False)
     parser.add_argument("--synthesis-max-per-seed", type=int, required=False)
@@ -1373,7 +1428,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     mastery_path = Path(args.mastery_output) if args.mastery_output else output_dir / "mastery.json"
     if args.mode in {"answer", "all"}:
         records = read_jsonl(input_path)
-        answers = answer_questions(records, n_answers=args.n_answers, temperature=args.temperature, top_p=args.top_p)
+        answer_resume = (
+            _parse_bool_env("ANSWER_RESUME", True)
+            if args.resume is None
+            else bool(args.resume)
+        )
+        existing_answers = (
+            _read_jsonl_tolerant(answer_raw_path)
+            if answer_resume and answer_raw_path.exists()
+            else []
+        )
+        answers = answer_questions(
+            records,
+            n_answers=args.n_answers,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            existing_records=existing_answers,
+            answer_output_path=answer_path,
+            answer_raw_output_path=answer_raw_path,
+            checkpoint_every=args.checkpoint_every,
+        )
         write_jsonl(answer_path, [project_victim_answer_record(record) for record in answers])
         write_jsonl(answer_raw_path, [project_victim_answer_raw_record(record) for record in answers])
         if args.mode == "answer":
