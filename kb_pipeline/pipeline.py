@@ -68,6 +68,7 @@ class VLLMManager:
         self.python_file = self.runtime_dir / "vllm.python"
         self.current_model: Optional[str] = None
         self.owned: bool = False
+        self.last_probe_error: str = ""
         self.runtime_mode = str(runtime_mode).strip().lower()
         if self.runtime_mode not in {"external", "managed"}:
             raise ValueError(
@@ -85,10 +86,23 @@ class VLLMManager:
     def probe(self) -> Optional[str]:
         script = _project_root() / "run" / "probe_vllm.py"
         try:
-            output = subprocess.check_output([sys.executable, str(script)], cwd=str(_project_root()))
-            model = normalize_whitespace(output.decode("utf-8"))
+            completed = subprocess.run(
+                [sys.executable, str(script)],
+                cwd=str(_project_root()),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode != 0:
+                self.last_probe_error = normalize_whitespace(
+                    completed.stderr or completed.stdout or f"exit={completed.returncode}"
+                )
+                return None
+            model = normalize_whitespace(completed.stdout)
+            self.last_probe_error = ""
             return model or None
-        except Exception:
+        except Exception as exc:
+            self.last_probe_error = f"{type(exc).__name__}: {exc}"
             return None
 
     @staticmethod
@@ -245,9 +259,15 @@ class VLLMManager:
                 return
             waited = (poll_idx + 1) * self.start_poll_sec
             running_text = running or "<not ready>"
+            error_text = (
+                f" probe_error={self.last_probe_error}"
+                if self.last_probe_error
+                else ""
+            )
             _log(
                 f"[vLLM] waiting for ready state: {model} "
                 f"running={running_text} "
+                f"{error_text}"
                 f"({waited}s/{self.start_timeout_sec}s)"
             )
         log_tail = ""
