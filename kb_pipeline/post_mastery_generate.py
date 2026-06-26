@@ -89,8 +89,15 @@ def _parse_float_map(value: Optional[str], default: Dict[str, float]) -> Dict[st
     return result
 
 
-def _normalize_model_name(model: str) -> str:
-    return str(model).strip().rstrip("/")
+def _model_aliases(model: str) -> set[str]:
+    normalized = str(model).strip().rstrip("/")
+    if not normalized:
+        return set()
+    aliases = {normalized}
+    basename = normalized.replace("\\", "/").rsplit("/", 1)[-1]
+    if basename:
+        aliases.add(basename)
+    return aliases
 
 
 def _mastery_lookup(records: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -494,9 +501,9 @@ async def _generate_all_async(
             for item in getattr(served, "data", [])
             if getattr(item, "id", None)
         ]
-        normalized_model = _normalize_model_name(model)
+        model_aliases = _model_aliases(model)
         for served_model in served_models:
-            if _normalize_model_name(served_model) == normalized_model:
+            if _model_aliases(served_model) & model_aliases:
                 model = served_model
                 break
     except Exception:

@@ -725,8 +725,15 @@ def _parse_bool_env(name: str, default: bool) -> bool:
     }
 
 
-def _normalize_model_name(model: str) -> str:
-    return str(model).strip().rstrip("/")
+def _model_aliases(model: str) -> set[str]:
+    normalized = str(model).strip().rstrip("/")
+    if not normalized:
+        return set()
+    aliases = {normalized}
+    basename = normalized.replace("\\", "/").rsplit("/", 1)[-1]
+    if basename:
+        aliases.add(basename)
+    return aliases
 
 
 async def _resolve_served_model_name(async_client: Any, model: str) -> str:
@@ -735,10 +742,10 @@ async def _resolve_served_model_name(async_client: Any, model: str) -> str:
     except Exception:
         return model
 
-    expected = _normalize_model_name(model)
+    expected = _model_aliases(model)
     for item in getattr(served, "data", []):
         served_id = getattr(item, "id", None)
-        if served_id and _normalize_model_name(str(served_id)) == expected:
+        if served_id and _model_aliases(str(served_id)) & expected:
             return str(served_id)
     return model
 

@@ -92,12 +92,21 @@ class VLLMManager:
             return None
 
     @staticmethod
-    def _models_match(running: Optional[str], expected: str) -> bool:
-        if not running:
-            return False
-        return normalize_whitespace(running).rstrip("/") == normalize_whitespace(
-            expected
-        ).rstrip("/")
+    def _model_aliases(model: Optional[str]) -> set[str]:
+        if not model:
+            return set()
+        normalized = normalize_whitespace(model).rstrip("/")
+        if not normalized:
+            return set()
+        aliases = {normalized}
+        basename = normalized.replace("\\", "/").rsplit("/", 1)[-1]
+        if basename:
+            aliases.add(basename)
+        return aliases
+
+    @classmethod
+    def _models_match(cls, running: Optional[str], expected: str) -> bool:
+        return bool(cls._model_aliases(running) & cls._model_aliases(expected))
 
     def _registered_python_matches_config(self) -> bool:
         expected = normalize_whitespace(os.environ.get("VLLM_PYTHON", ""))
@@ -210,7 +219,7 @@ class VLLMManager:
                 if self.probe() is None:
                     _log("[vLLM] old model stopped, ready to launch configured runtime")
                     break
-        if running and running != model:
+        if running and not self._models_match(running, model):
             _log(f"[vLLM] stopping mismatched model: {running}")
             self.stop(force=True)
             for _ in range(30):
@@ -235,8 +244,10 @@ class VLLMManager:
                 _log(f"[vLLM] ready: {model}")
                 return
             waited = (poll_idx + 1) * self.start_poll_sec
+            running_text = running or "<not ready>"
             _log(
                 f"[vLLM] waiting for ready state: {model} "
+                f"running={running_text} "
                 f"({waited}s/{self.start_timeout_sec}s)"
             )
         log_tail = ""

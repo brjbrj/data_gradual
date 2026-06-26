@@ -54,8 +54,15 @@ class VLLMClient:
             self.max_retries = int(max_retries)
 
     @staticmethod
-    def _normalize_model_name(model: str) -> str:
-        return str(model).strip().rstrip("/")
+    def _model_aliases(model: str) -> set[str]:
+        normalized = str(model).strip().rstrip("/")
+        if not normalized:
+            return set()
+        aliases = {normalized}
+        basename = normalized.replace("\\", "/").rsplit("/", 1)[-1]
+        if basename:
+            aliases.add(basename)
+        return aliases
 
     def _served_model_names(self) -> List[str]:
         request = urllib.request.Request(
@@ -77,13 +84,13 @@ class VLLMClient:
         return names
 
     def _use_matching_served_model(self) -> bool:
-        expected = self._normalize_model_name(self.model)
+        expected = self._model_aliases(self.model)
         try:
             served_models = self._served_model_names()
         except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError):
             return False
         for served_model in served_models:
-            if self._normalize_model_name(served_model) == expected and served_model != self.model:
+            if self._model_aliases(served_model) & expected and served_model != self.model:
                 self.model = served_model
                 return True
         return False
