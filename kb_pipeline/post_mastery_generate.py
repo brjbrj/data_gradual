@@ -455,6 +455,87 @@ def _write_round_checkpoint(
     write_jsonl(failed_output_path, round_failures)
 
 
+def _plan_id(record: Dict[str, Any]) -> str:
+    return str(record.get("plan_id") or "")
+
+
+def _ordered_by_plan(
+    records: Sequence[Dict[str, Any]],
+    plan_order: Dict[str, int],
+) -> List[Dict[str, Any]]:
+    return sorted(
+        records,
+        key=lambda item: plan_order.get(_plan_id(item), 10**12),
+    )
+
+
+def _load_existing_generation_state(
+    *,
+    output_path: Optional[Path],
+    raw_output_path: Optional[Path],
+    plan_order: Dict[str, int],
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    successes: Dict[str, Dict[str, Any]] = {}
+    raw_outputs: Dict[str, Dict[str, Any]] = {}
+
+    if output_path is not None and output_path.exists():
+        for record in read_jsonl(output_path):
+            plan_id = _plan_id(record)
+            if plan_id and plan_id in plan_order:
+                successes[plan_id] = record
+
+    if raw_output_path is not None and raw_output_path.exists():
+        for record in read_jsonl(raw_output_path):
+            plan_id = _plan_id(record)
+            if plan_id and plan_id in plan_order:
+                raw_outputs[plan_id] = record
+
+    return successes, raw_outputs
+
+
+def _write_generation_checkpoint(
+    *,
+    output_path: Optional[Path],
+    raw_output_path: Optional[Path],
+    failed_output_path: Optional[Path],
+    summary_path: Optional[Path],
+    cumulative_successes: Dict[str, Dict[str, Any]],
+    cumulative_raw_outputs: Dict[str, Dict[str, Any]],
+    latest_failures: Sequence[Dict[str, Any]],
+    plan_order: Dict[str, int],
+    total_plans: int,
+    round_index: int,
+    done_in_round: int,
+    checkpoint_reason: str,
+) -> None:
+    if output_path is None or raw_output_path is None or failed_output_path is None:
+        return
+
+    ordered_successes = _ordered_by_plan(cumulative_successes.values(), plan_order)
+    ordered_raw_outputs = _ordered_by_plan(cumulative_raw_outputs.values(), plan_order)
+    write_jsonl(output_path, ordered_successes)
+    write_jsonl(raw_output_path, ordered_raw_outputs)
+    write_jsonl(failed_output_path, latest_failures)
+
+    if summary_path is not None:
+        write_json(
+            summary_path,
+            {
+                "planned": total_plans,
+                "generated": len(ordered_successes),
+                "failed_latest_checkpoint": len(latest_failures),
+                "remaining": max(0, total_plans - len(ordered_successes)),
+                "round": round_index,
+                "done_in_round": done_in_round,
+                "checkpoint_reason": checkpoint_reason,
+                "output": str(output_path),
+                "raw_output": str(raw_output_path),
+                "failed_output": str(failed_output_path),
+                "round_output_dir": str(_round_directory(output_path)),
+            },
+        )
+
+
 async def _generate_all_async(
     plans: Sequence[Dict[str, Any]],
     mastery_records: Sequence[Dict[str, Any]],
@@ -475,6 +556,8 @@ async def _generate_all_async(
     raw_output_path: Optional[Path],
     failed_output_path: Optional[Path],
     round_retry_delay: float,
+    resume: bool,
+    checkpoint_every: int,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
         from openai import AsyncOpenAI
@@ -611,15 +694,45 @@ async def _generate_all_async(
         str(plan.get("plan_id")): index
         for index, plan in enumerate(plans)
     }
-    cumulative_successes: Dict[str, Dict[str, Any]] = {}
-    cumulative_raw_outputs: Dict[str, Dict[str, Any]] = {}
+    if resume:
+        cumulative_successes, cumulative_raw_outputs = _load_existing_generation_state(
+            output_path=output_path,
+            raw_output_path=raw_output_path,
+            plan_order=plan_order,
+        )
+    else:
+        cumulative_successes = {}
+        cumulative_raw_outputs = {}
+    completed_plan_ids = set(cumulative_successes)
     pending: List[Dict[str, Any]] = [
         {"plan": plan, "previous_failure": None}
         for plan in plans
+        if str(plan.get("plan_id")) not in completed_plan_ids
     ]
     final_failures: List[Dict[str, Any]] = []
     round_index = 0
     infinite_rounds = max_retries < 0
+    summary_path = output_path.with_suffix(".summary.json") if output_path is not None else None
+    if completed_plan_ids:
+        print(
+            f"[generate] resume enabled: loaded_success={len(completed_plan_ids)} "
+            f"remaining={len(pending)}",
+            flush=True,
+        )
+        _write_generation_checkpoint(
+            output_path=output_path,
+            raw_output_path=raw_output_path,
+            failed_output_path=failed_output_path,
+            summary_path=summary_path,
+            cumulative_successes=cumulative_successes,
+            cumulative_raw_outputs=cumulative_raw_outputs,
+            latest_failures=[],
+            plan_order=plan_order,
+            total_plans=len(plans),
+            round_index=round_index,
+            done_in_round=0,
+            checkpoint_reason="resume_loaded",
+        )
 
     try:
         while pending and (infinite_rounds or round_index <= max_retries):
@@ -650,6 +763,26 @@ async def _generate_all_async(
                 else:
                     round_failures.append(attempt_record)
                 done += 1
+                if checkpoint_every > 0 and done % checkpoint_every == 0:
+                    _write_generation_checkpoint(
+                        output_path=output_path,
+                        raw_output_path=raw_output_path,
+                        failed_output_path=failed_output_path,
+                        summary_path=summary_path,
+                        cumulative_successes=cumulative_successes,
+                        cumulative_raw_outputs=cumulative_raw_outputs,
+                        latest_failures=round_failures,
+                        plan_order=plan_order,
+                        total_plans=len(plans),
+                        round_index=round_index,
+                        done_in_round=done,
+                        checkpoint_reason="periodic",
+                    )
+                    print(
+                        f"[generate] checkpoint saved round={round_index} "
+                        f"done={done}/{len(tasks)} total_success={len(cumulative_successes)}",
+                        flush=True,
+                    )
                 if _should_log_progress(done, len(tasks)):
                     elapsed = time.time() - round_started_at
                     rate = done / elapsed if elapsed > 0 else 0.0
@@ -685,13 +818,13 @@ async def _generate_all_async(
                     failure["next_plan"] = None
                     failure["next_round"] = None
 
-            ordered_successes = sorted(
+            ordered_successes = _ordered_by_plan(
                 cumulative_successes.values(),
-                key=lambda item: plan_order.get(str(item.get("plan_id")), 10**12),
+                plan_order,
             )
-            ordered_raw_outputs = sorted(
+            ordered_raw_outputs = _ordered_by_plan(
                 cumulative_raw_outputs.values(),
-                key=lambda item: plan_order.get(str(item.get("plan_id")), 10**12),
+                plan_order,
             )
             _write_round_checkpoint(
                 output_path=output_path,
@@ -719,6 +852,20 @@ async def _generate_all_async(
                 ]
 
             final_failures = round_failures
+            _write_generation_checkpoint(
+                output_path=output_path,
+                raw_output_path=raw_output_path,
+                failed_output_path=failed_output_path,
+                summary_path=summary_path,
+                cumulative_successes=cumulative_successes,
+                cumulative_raw_outputs=cumulative_raw_outputs,
+                latest_failures=round_failures,
+                plan_order=plan_order,
+                total_plans=len(plans),
+                round_index=round_index,
+                done_in_round=done,
+                checkpoint_reason="round_complete",
+            )
             print(
                 f"[generate] round={round_index} complete "
                 f"success={len(round_successes)} failed={len(round_failures)} "
@@ -732,14 +879,8 @@ async def _generate_all_async(
     finally:
         await client.close()
 
-    ordered_successes = sorted(
-        cumulative_successes.values(),
-        key=lambda item: plan_order.get(str(item.get("plan_id")), 10**12),
-    )
-    ordered_raw_outputs = sorted(
-        cumulative_raw_outputs.values(),
-        key=lambda item: plan_order.get(str(item.get("plan_id")), 10**12),
-    )
+    ordered_successes = _ordered_by_plan(cumulative_successes.values(), plan_order)
+    ordered_raw_outputs = _ordered_by_plan(cumulative_raw_outputs.values(), plan_order)
     return ordered_successes, ordered_raw_outputs, final_failures
 
 
@@ -763,6 +904,8 @@ def generate_post_mastery_questions(
     raw_output_path: Optional[Path] = None,
     failed_output_path: Optional[Path] = None,
     round_retry_delay: Optional[float] = None,
+    resume: Optional[bool] = None,
+    checkpoint_every: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     resolved_concurrency = concurrency
     if resolved_concurrency is None:
@@ -819,6 +962,12 @@ def generate_post_mastery_questions(
             round_retry_delay=round_retry_delay
             if round_retry_delay is not None
             else _parse_float_env("GEN_ROUND_RETRY_DELAY", 1.0),
+            resume=resume
+            if resume is not None
+            else _parse_bool_env("GEN_RESUME", True),
+            checkpoint_every=checkpoint_every
+            if checkpoint_every is not None
+            else max(1, _parse_int_env("GEN_CHECKPOINT_EVERY", 50)),
         )
     )
 
@@ -836,6 +985,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--concurrency", type=int, required=False)
     parser.add_argument("--max-retries", type=int, required=False)
     parser.add_argument("--max-tokens", type=int, required=False)
+    parser.add_argument("--resume", action="store_true", default=None)
+    parser.add_argument("--no-resume", action="store_false", dest="resume")
+    parser.add_argument("--checkpoint-every", type=int, required=False)
     args = parser.parse_args(argv)
 
     plan_path = Path(args.plan)
@@ -859,6 +1011,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         concurrency=args.concurrency,
         max_retries=args.max_retries,
         max_tokens=args.max_tokens,
+        resume=args.resume,
+        checkpoint_every=args.checkpoint_every,
         output_path=output_path,
         raw_output_path=raw_output_path,
         failed_output_path=failed_output_path,

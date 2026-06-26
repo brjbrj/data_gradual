@@ -55,6 +55,24 @@ bash run/04_build_synthesis_plan.sh gsm8k
 bash run/05_generate_questions.sh gsm8k
 ```
 
+Generation resumes by default. It reloads existing `generated.jsonl` and skips
+already successful `plan_id`s. It also refreshes `generated.jsonl`,
+`generated.raw.jsonl`, `generated.failed.jsonl`, and `generated.summary.json`
+periodically while running.
+
+Useful knobs:
+
+```bash
+GEN_RESUME=1
+GEN_CHECKPOINT_EVERY=50
+```
+
+Disable resume only when you intentionally want to regenerate from scratch:
+
+```bash
+GEN_RESUME=0 bash run/05_generate_questions.sh gsm8k --no-resume
+```
+
 6. Validate generated questions, requires `QC_MODEL` already served:
 
 ```bash
