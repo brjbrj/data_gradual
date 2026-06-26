@@ -725,6 +725,24 @@ def _parse_bool_env(name: str, default: bool) -> bool:
     }
 
 
+def _normalize_model_name(model: str) -> str:
+    return str(model).strip().rstrip("/")
+
+
+async def _resolve_served_model_name(async_client: Any, model: str) -> str:
+    try:
+        served = await async_client.models.list()
+    except Exception:
+        return model
+
+    expected = _normalize_model_name(model)
+    for item in getattr(served, "data", []):
+        served_id = getattr(item, "id", None)
+        if served_id and _normalize_model_name(str(served_id)) == expected:
+            return str(served_id)
+    return model
+
+
 async def _evaluate_answers_async(
     answer_records: Sequence[Dict[str, Any]],
     *,
@@ -828,6 +846,7 @@ async def _evaluate_answers_async(
         timeout=timeout,
         max_retries=0,
     )
+    model = await _resolve_served_model_name(async_client, model)
     semaphore = asyncio.Semaphore(max(1, workers))
     outputs: List[Optional[Dict[str, Any]]] = [None] * total
     index_by_task = {

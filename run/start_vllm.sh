@@ -42,18 +42,18 @@ while [[ $# -gt 0 ]]; do
 done
 
 MODEL_NAME="${MODEL_OVERRIDE:-${VLLM_MODEL:-${OPENAI_MODEL:-/root/brjverl/models/Qwen3.6-27B}}}"
-MODEL_NAME="$(printf '%s' "${MODEL_NAME}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s:/*$::')"
+MODEL_NAME="$(printf '%s' "${MODEL_NAME}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
 CONDA_ENV_NAME="${VLLM_CONDA_ENV:-${DEFAULT_VLLM_CONDA_ENV:-qwen}}"
 VLLM_PYTHON_BIN="${VLLM_PYTHON:-}"
 API_KEY="${VLLM_API_KEY:-EMPTY}"
-HOST="${VLLM_HOST:-0.0.0.0}"
+HOST="${VLLM_HOST-0.0.0.0}"
 # VLLM_PORT is also consumed internally by older vLLM releases. Prefer the
 # project-specific name while retaining the old setting as a compatibility
 # fallback, then remove both variables before launching the server.
 PORT="${VLLM_API_PORT:-${VLLM_PORT:-8911}}"
 TP="${VLLM_TP:-2}"
-MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-8192}"
-GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
+MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN-8192}"
+GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION-0.90}"
 ENABLE_AUTO_TOOL_CHOICE="${VLLM_ENABLE_AUTO_TOOL_CHOICE:-1}"
 TOOL_CALL_PARSER="${VLLM_TOOL_CALL_PARSER:-hermes}"
 ENFORCE_EAGER="${VLLM_ENFORCE_EAGER:-0}"
@@ -74,6 +74,10 @@ NCCL_PXN_DISABLE_VALUE="${VLLM_NCCL_PXN_DISABLE:-inherit}"
 NCCL_CUMEM_ENABLE_VALUE="${VLLM_NCCL_CUMEM_ENABLE:-inherit}"
 GLOO_SOCKET_IFNAME_VALUE="${VLLM_GLOO_SOCKET_IFNAME:-inherit}"
 VLLM_HOST_IP_VALUE="${VLLM_HOST_IP_CONFIG:-inherit}"
+VLLM_ATTENTION_BACKEND_VALUE="${VLLM_ATTENTION_BACKEND:-inherit}"
+VLLM_USE_FLASH_ATTN_VALUE="${VLLM_USE_FLASH_ATTN:-inherit}"
+VLLM_USE_FLASHINFER_VALUE="${VLLM_USE_FLASHINFER:-inherit}"
+FLASHINFER_DISABLE_JIT_VALUE="${FLASHINFER_DISABLE_JIT:-inherit}"
 
 is_enabled() {
   case "${1,,}" in
@@ -147,6 +151,10 @@ apply_env_setting "NCCL_PXN_DISABLE" "${NCCL_PXN_DISABLE_VALUE}"
 apply_env_setting "NCCL_CUMEM_ENABLE" "${NCCL_CUMEM_ENABLE_VALUE}"
 apply_env_setting "GLOO_SOCKET_IFNAME" "${GLOO_SOCKET_IFNAME_VALUE}"
 apply_env_setting "VLLM_HOST_IP" "${VLLM_HOST_IP_VALUE}"
+apply_env_setting "VLLM_ATTENTION_BACKEND" "${VLLM_ATTENTION_BACKEND_VALUE}"
+apply_env_setting "VLLM_USE_FLASH_ATTN" "${VLLM_USE_FLASH_ATTN_VALUE}"
+apply_env_setting "VLLM_USE_FLASHINFER" "${VLLM_USE_FLASHINFER_VALUE}"
+apply_env_setting "FLASHINFER_DISABLE_JIT" "${FLASHINFER_DISABLE_JIT_VALUE}"
 
 mkdir -p "$(dirname "${PID_FILE}")"
 mkdir -p "$(dirname "${LOG_FILE}")"
@@ -166,13 +174,20 @@ fi
 
 CMD=("${VLLM_PYTHON_BIN}" -m vllm.entrypoints.openai.api_server
   --model "${MODEL_NAME}"
-  --host "${HOST}"
   --port "${PORT}"
   --tensor-parallel-size "${TP}"
-  --max-model-len "${MAX_MODEL_LEN}"
-  --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}"
   --trust-remote-code
 )
+
+if [[ -n "${HOST}" ]]; then
+  CMD+=(--host "${HOST}")
+fi
+if [[ -n "${MAX_MODEL_LEN}" ]]; then
+  CMD+=(--max-model-len "${MAX_MODEL_LEN}")
+fi
+if [[ -n "${GPU_MEMORY_UTILIZATION}" ]]; then
+  CMD+=(--gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}")
+fi
 
 if [[ -n "${API_KEY}" ]]; then
   CMD+=(--api-key "${API_KEY}")

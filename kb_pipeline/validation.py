@@ -626,6 +626,24 @@ def _project_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _normalize_model_name(model: str) -> str:
+    return str(model).strip().rstrip("/")
+
+
+async def _resolve_served_model_name(client: Any, model: str) -> str:
+    try:
+        served = await client.models.list()
+    except Exception:
+        return model
+
+    expected = _normalize_model_name(model)
+    for item in getattr(served, "data", []):
+        served_id = getattr(item, "id", None)
+        if served_id and _normalize_model_name(str(served_id)) == expected:
+            return str(served_id)
+    return model
+
+
 async def _run_validation_async(
     candidates: Sequence[Dict[str, Any]],
     plans: Sequence[Dict[str, Any]],
@@ -659,6 +677,7 @@ async def _run_validation_async(
         timeout=timeout,
         max_retries=0,
     )
+    model = await _resolve_served_model_name(client, model)
     semaphore = asyncio.Semaphore(max(1, concurrency))
     plan_lookup = {str(item.get("plan_id")): item for item in plans}
     mastery_lookup = {str(item.get("task_id")): item for item in mastery_records}
