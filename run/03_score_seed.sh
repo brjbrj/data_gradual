@@ -21,6 +21,7 @@ stage_log "03 score_seed input=${VICTIM_ANSWER_RAW_PATH} output=${STEP_EVALUATIO
   --input "${VICTIM_ANSWER_RAW_PATH}" \
   --seed-input "${KB_RECORDS_PATH}" \
   --output-dir "${ANALYSIS_DIR}" \
+  --model "${STEP_MODEL_NAME}" \
   --step-output "${STEP_EVALUATION_PATH}" \
   --mastery-record-output "${MASTERY_PATH}" \
   --mastery-output "${MASTERY_JSON_PATH}" \

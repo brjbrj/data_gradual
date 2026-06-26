@@ -25,6 +25,7 @@ stage_log "02 answer_seed input=${KB_RECORDS_PATH} output=${VICTIM_ANSWER_RAW_PA
   --n-answers "${N_ANSWERS}" \
   --temperature "${VICTIM_TEMPERATURE:-0.3}" \
   --top-p "${VICTIM_TOP_P:-0.95}" \
+  --model "${VICTIM_MODEL_NAME}" \
   --answer-output "${VICTIM_ANSWER_PATH}" \
   --answer-raw-output "${VICTIM_ANSWER_RAW_PATH}" \
   --checkpoint-every "${ANSWER_CHECKPOINT_EVERY:-50}" \

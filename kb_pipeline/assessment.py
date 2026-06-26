@@ -1402,6 +1402,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--seed-input", required=False, help="Seed JSONL path for score mode")
     parser.add_argument("--output-dir", required=True, help="Output directory")
     parser.add_argument("--n-answers", type=int, default=4, help="Number of answers per question")
+    parser.add_argument("--model", required=False, help="Model id/path to use for this assessment stage")
     parser.add_argument("--temperature", type=float, default=None, help="Victim answer sampling temperature")
     parser.add_argument("--top-p", type=float, default=None, help="Victim answer nucleus sampling top_p")
     parser.add_argument("--answer-output", required=False, help="Victim answer JSONL path")
@@ -1428,6 +1429,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     mastery_path = Path(args.mastery_output) if args.mastery_output else output_dir / "mastery.json"
     if args.mode in {"answer", "all"}:
         records = read_jsonl(input_path)
+        answer_model = args.model or os.environ.get("VICTIM_MODEL") or os.environ.get("VLLM_MODEL")
+        answer_client = VLLMClient(model=answer_model) if answer_model else None
         answer_resume = (
             _parse_bool_env("ANSWER_RESUME", True)
             if args.resume is None
@@ -1441,6 +1444,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         answers = answer_questions(
             records,
             n_answers=args.n_answers,
+            client=answer_client,
             temperature=args.temperature,
             top_p=args.top_p,
             existing_records=existing_answers,
@@ -1470,11 +1474,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             raise ValueError("--seed-input is required in score/all mode")
         seed_records = read_jsonl(Path(args.seed_input))
         answer_records = read_jsonl(input_path)
+        score_model = args.model or os.environ.get("STEP_MODEL") or os.environ.get("VLLM_MODEL")
+        score_client = VLLMClient(model=score_model) if score_model else None
         step_checkpoint_path = step_path.with_name(
             step_path.name + ".partial"
         )
         step_reports = evaluate_answers(
             answer_records,
+            client=score_client,
             checkpoint_path=step_checkpoint_path,
         )
         write_jsonl(step_path, step_reports)
