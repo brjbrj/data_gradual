@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
@@ -84,7 +85,7 @@ class VLLMManager:
     def probe(self) -> Optional[str]:
         script = _project_root() / "run" / "probe_vllm.py"
         try:
-            output = subprocess.check_output(["python", str(script)], cwd=str(_project_root()))
+            output = subprocess.check_output([sys.executable, str(script)], cwd=str(_project_root()))
             model = normalize_whitespace(output.decode("utf-8"))
             return model or None
         except Exception:

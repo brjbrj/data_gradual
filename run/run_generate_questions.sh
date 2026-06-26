@@ -68,17 +68,22 @@ cleanup_managed_vllm() {
 }
 
 if [[ "${VLLM_RUNTIME_MODE:-external}" == "managed" ]]; then
-  MANAGED_VLLM=1
-  trap 'cleanup_managed_vllm 130' INT
-  trap 'cleanup_managed_vllm 143' TERM
-  trap 'cleanup_managed_vllm $?' EXIT
-  echo "[run_generate_questions] starting managed vLLM model: ${GEN_MODEL_NAME}" >&2
-  "${ROOT_DIR}/run/start_vllm.sh" \
-    --background \
-    --pid-file "${VLLM_PID_FILE}" \
-    --log-file "${VLLM_LOG_PATH}" \
-    --model "${GEN_MODEL_NAME}" >/dev/null
-  wait_for_vllm_model "${GEN_MODEL_NAME}"
+  RUNNING_MODEL="$("${PYTHON_BIN}" "${ROOT_DIR}/run/probe_vllm.py" 2>/dev/null || true)"
+  if [[ -n "${RUNNING_MODEL}" && "$(normalize_model_name "${RUNNING_MODEL}")" == "$(normalize_model_name "${GEN_MODEL_NAME}")" ]]; then
+    echo "[run_generate_questions] reusing existing vLLM model: ${RUNNING_MODEL}" >&2
+  else
+    MANAGED_VLLM=1
+    trap 'cleanup_managed_vllm 130' INT
+    trap 'cleanup_managed_vllm 143' TERM
+    trap 'cleanup_managed_vllm $?' EXIT
+    echo "[run_generate_questions] starting managed vLLM model: ${GEN_MODEL_NAME}" >&2
+    "${ROOT_DIR}/run/start_vllm.sh" \
+      --background \
+      --pid-file "${VLLM_PID_FILE}" \
+      --log-file "${VLLM_LOG_PATH}" \
+      --model "${GEN_MODEL_NAME}" >/dev/null
+    wait_for_vllm_model "${GEN_MODEL_NAME}"
+  fi
 else
   echo "[run_generate_questions] external vLLM mode; expecting ${GEN_MODEL_NAME} at ${VLLM_BASE_URL:-http://127.0.0.1:8911/v1}" >&2
 fi

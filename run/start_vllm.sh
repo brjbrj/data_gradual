@@ -42,6 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 MODEL_NAME="${MODEL_OVERRIDE:-${VLLM_MODEL:-${OPENAI_MODEL:-/root/brjverl/models/Qwen3.6-27B}}}"
+MODEL_NAME="$(printf '%s' "${MODEL_NAME}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s:/*$::')"
 CONDA_ENV_NAME="${VLLM_CONDA_ENV:-${DEFAULT_VLLM_CONDA_ENV:-qwen}}"
 VLLM_PYTHON_BIN="${VLLM_PYTHON:-}"
 API_KEY="${VLLM_API_KEY:-EMPTY}"

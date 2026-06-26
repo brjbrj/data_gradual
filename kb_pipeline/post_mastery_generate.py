@@ -89,6 +89,10 @@ def _parse_float_map(value: Optional[str], default: Dict[str, float]) -> Dict[st
     return result
 
 
+def _normalize_model_name(model: str) -> str:
+    return str(model).strip().rstrip("/")
+
+
 def _mastery_lookup(records: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return {str(record.get("task_id")): record for record in records}
 
@@ -482,6 +486,22 @@ async def _generate_all_async(
         timeout=timeout,
         max_retries=0,
     )
+
+    try:
+        served = await client.models.list()
+        served_models = [
+            str(item.id)
+            for item in getattr(served, "data", [])
+            if getattr(item, "id", None)
+        ]
+        normalized_model = _normalize_model_name(model)
+        for served_model in served_models:
+            if _normalize_model_name(served_model) == normalized_model:
+                model = served_model
+                break
+    except Exception:
+        # Generation will surface the original API error if the endpoint is not usable.
+        pass
 
     async def generate_one(
         index: int,
