@@ -17,32 +17,89 @@ Chinese documentation: [README.zh.md](./README.zh.md)
 9. Audit correctness, solvability, uniqueness, steps, and relative difficulty.
 10. Apply targeted repair and revalidate in the next batch round.
 11. Export passed records to `validated.jsonl`.
+12. Optionally export validated records to training-format JSONL.
 
-Training-format export is not connected yet.
+For the recommended restart-friendly workflow, use the numbered stage scripts
+instead of the monolithic pipeline. See [run/README_stages.md](./run/README_stages.md)
+for the full stage reference.
 
-## Run
+## Run By Stage
 
 ```bash
 cd /root/brjverl/data_gradual_new
+export STAGE_VLLM_MODE=external
+```
+
+The stage launchers automatically load `config/pipeline.env`, activate or use
+the configured `PIPELINE_PYTHON`, and write outputs under `OUTPUT_DIR`.
+
+The default stage mode is external vLLM: start the needed model yourself, then
+run the corresponding stage. The script only checks `/v1/models` and will not
+start, switch, or stop vLLM unless you explicitly set `STAGE_VLLM_MODE=managed`.
+
+### Stage Commands
+
+```bash
+bash run/01_build_kb.sh gsm8k
+bash run/02_answer_seed.sh gsm8k
+bash run/03_score_seed.sh gsm8k
+bash run/04_build_synthesis_plan.sh gsm8k
+bash run/05_generate_questions.sh gsm8k
+bash run/06_validate_generated.sh gsm8k
+bash run/07_export_training_data.sh gsm8k
+```
+
+Stage model requirements:
+
+| Stage | vLLM requirement | Main output |
+| --- | --- | --- |
+| `01_build_kb.sh` | None | `outputs/kb/<dataset>/records.jsonl` |
+| `02_answer_seed.sh` | `VICTIM_MODEL` served | `outputs/analysis/<dataset>/victim_answers.raw.jsonl` |
+| `03_score_seed.sh` | `STEP_MODEL` served | `outputs/analysis/<dataset>/mastery_records.jsonl` |
+| `04_build_synthesis_plan.sh` | None | `outputs/planning/<dataset>/synthesis_plan.jsonl` |
+| `05_generate_questions.sh` | `GEN_MODEL` served | `outputs/pipeline/<dataset>/generated.jsonl` |
+| `06_validate_generated.sh` | `QC_MODEL` served | `outputs/pipeline/<dataset>/validated.jsonl` |
+| `07_export_training_data.sh` | None | `outputs/pipeline/<dataset>/train.jsonl` |
+
+For example, if stage 2 uses Llama and stages 3/5/6 use Qwen, start or switch
+the external vLLM server before each model-dependent stage.
+
+### Resume And Rerun
+
+Resume is enabled by default:
+
+```bash
+export STAGE_RESUME=1
+export ANSWER_CHECKPOINT_EVERY=50
+export GEN_CHECKPOINT_EVERY=50
+```
+
+Recovery behavior:
+
+| Stage | Recovery behavior |
+| --- | --- |
+| `01_build_kb.sh` | Skips if KB records and entities already exist. |
+| `02_answer_seed.sh` | Resumes from `victim_answers.raw.jsonl`; periodically saves answers. |
+| `03_score_seed.sh` | Resumes from `step_evaluations.jsonl.partial`; appends completed score records. |
+| `04_build_synthesis_plan.sh` | Skips if plan and summary already exist. |
+| `05_generate_questions.sh` | Resumes from `generated.jsonl`; skips successful `plan_id`s; periodically checkpoints. |
+| `06_validate_generated.sh` | Saves canonical files after each validation round; skips if validated output exists. |
+| `07_export_training_data.sh` | Skips if train output and summary already exist. |
+
+Force a stage to rebuild from scratch:
+
+```bash
+STAGE_FORCE=1 bash run/05_generate_questions.sh gsm8k
+```
+
+The old convenience commands are still available as wrappers:
+
+```bash
 bash run/run_full_pipeline.sh gsm8k
-```
-
-The launcher automatically loads and activates the configured pipeline
-environment.
-
-The full pipeline validates by default. To stop after generation:
-
-```bash
-bash run/run_full_pipeline.sh gsm8k --skip-validation
-```
-
-Standalone downstream stages:
-
-```bash
-bash run/run_build_synthesis_plan.sh gsm8k
 bash run/run_generate_questions.sh gsm8k
-bash run/run_validate_generated.sh gsm8k
 ```
+
+They now delegate to the numbered stage scripts.
 
 ## Validation configuration
 
