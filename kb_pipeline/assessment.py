@@ -694,16 +694,51 @@ def _parse_step_evaluation_response(
         "efficiency",
     )
     score_arrays: Dict[str, List[float]] = {}
-    for key in score_keys:
-        values = parsed.get(key, [])
-        if not isinstance(values, list):
-            raise ValueError(f"missing score array: {key}")
-        if len(values) != len(step_texts):
-            raise ValueError(f"score array length mismatch for {key}")
-        score_arrays[key] = [
-            _normalize_step_score(value)
-            for value in values
-        ]
+    step_scores = parsed.get("step_scores")
+    if isinstance(step_scores, list):
+        scores_by_step_id: Dict[int, List[Any]] = {}
+        for item in step_scores:
+            step_id: Any = None
+            scores: Any = None
+            if isinstance(item, dict):
+                step_id = item.get("step_id", item.get("id"))
+                scores = item.get("scores")
+                if scores is None:
+                    scores = [item.get(key) for key in score_keys]
+            elif isinstance(item, list) and len(item) == 2:
+                step_id, scores = item
+            try:
+                normalized_step_id = int(step_id)
+            except Exception as exc:
+                raise ValueError("invalid step_scores step_id") from exc
+            if not isinstance(scores, list) or len(scores) != len(score_keys):
+                raise ValueError(
+                    "step_scores item must contain exactly five scores"
+                )
+            scores_by_step_id[normalized_step_id] = scores
+        expected_ids = set(range(1, len(step_texts) + 1))
+        if set(scores_by_step_id) != expected_ids:
+            raise ValueError(
+                "step_scores step_id set mismatch: "
+                f"expected 1..{len(step_texts)}, got "
+                f"{sorted(scores_by_step_id)}"
+            )
+        for key_index, key in enumerate(score_keys):
+            score_arrays[key] = [
+                _normalize_step_score(scores_by_step_id[step_id][key_index])
+                for step_id in range(1, len(step_texts) + 1)
+            ]
+    else:
+        for key in score_keys:
+            values = parsed.get(key, [])
+            if not isinstance(values, list):
+                raise ValueError(f"missing score array: {key}")
+            if len(values) != len(step_texts):
+                raise ValueError(f"score array length mismatch for {key}")
+            score_arrays[key] = [
+                _normalize_step_score(value)
+                for value in values
+            ]
     normalized_steps = _build_step_records(step_texts, score_arrays)
     if not normalized_steps:
         raise ValueError("no steps to score")

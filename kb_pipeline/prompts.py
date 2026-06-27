@@ -61,6 +61,13 @@ def build_victim_answer_prompt(question: str, attempt_index: int) -> List[Dict[s
 
 
 def build_step_evaluation_prompt(question: str, reference_answer: str, steps: List[str], final_answer: str) -> List[Dict[str, str]]:
+    indexed_steps = [
+        {
+            "step_id": index,
+            "text": step,
+        }
+        for index, step in enumerate(steps, start=1)
+    ]
     system = (
         "You are a professional evaluator of mathematical problem-solving steps. "
         "You must score each provided step independently and conservatively. "
@@ -121,6 +128,7 @@ def build_step_evaluation_prompt(question: str, reference_answer: str, steps: Li
             "Do not split one provided step into multiple steps, merge multiple provided steps into one, add missing steps, or remove any provided step.",
             "For long solutions, continue scoring until the final provided step; do not stop early, summarize later steps, or output fewer scores because there are many steps.",
             "Treat the provided solution_steps as an indexed list from 1 to input_step_count, and score every index exactly once.",
+            "Use the provided step_id values in solution_steps; do not renumber steps or infer new identifiers.",
             "Some elements may not be actual mathematical steps (for example introductory phrases or meta-comments). You must still score every single element.",
             "Do not skip any element, even if it seems redundant, non-mathematical, or incorrectly segmented.",
             "You may use neighboring steps as context when evaluating logical consistency and necessity.",
@@ -135,27 +143,42 @@ def build_step_evaluation_prompt(question: str, reference_answer: str, steps: Li
         "question": question,
         "reference_answer": reference_answer,
         "input_step_count": len(steps),
-        "solution_steps": steps,
+        "solution_steps": indexed_steps,
         "final_answer": final_answer,
         "output_schema": {
             "step_count": f"must equal input_step_count exactly, i.e. {len(steps)}",
-            "correctness": ["one score per step"],
-            "logical": ["one score per step"],
-            "standardization": ["one score per step"],
-            "completeness": ["one score per step"],
-            "efficiency": ["one score per step"],
+            "score_dimensions": [
+                "correctness",
+                "logical",
+                "standardization",
+                "completeness",
+                "efficiency",
+            ],
+            "step_scores": [
+                {
+                    "step_id": "1-based integer index of the provided step",
+                    "scores": [
+                        "correctness score",
+                        "logical score",
+                        "standardization score",
+                        "completeness score",
+                        "efficiency score",
+                    ],
+                }
+            ],
             "final_answer_correct": "boolean",
             "overall_reason": "one short sentence under 30 words",
         },
         "output_rules": [
             "Return only a valid JSON object.",
             "step_count must equal input_step_count exactly.",
-            "The number of scores in each list must exactly equal input_step_count.",
-            "The i-th score in every list must correspond to the i-th provided solution_steps item.",
-            "Before returning, verify that correctness, logical, standardization, completeness, and efficiency all contain exactly input_step_count values.",
-            "If input_step_count is large, still output complete score arrays for all steps; never truncate arrays, use ellipses, summarize ranges, or omit repeated-looking steps.",
-            "Do not use compact range notation such as scores for steps 1-10; every score must appear as an explicit numeric value in its array.",
-            "All score arrays must be compact and presented on a single line, with no line breaks inside the arrays.",
+            "Do not output separate top-level correctness, logical, standardization, completeness, or efficiency arrays.",
+            "Output exactly one step_scores item for each provided solution_steps item.",
+            "Each step_scores item must use the 1-based step_id of the corresponding provided solution_steps item.",
+            "Each step_scores item must contain exactly five scores in this fixed order: correctness, logical, standardization, completeness, efficiency.",
+            "Before returning, verify that step_scores contains exactly input_step_count items and that the step_id values are exactly 1 through input_step_count with no duplicates or gaps.",
+            "If input_step_count is large, still output one explicit step_scores item for every step; never truncate, use ellipses, summarize ranges, or omit repeated-looking steps.",
+            "Do not use compact range notation such as scores for steps 1-10; every step must have its own explicit step_scores item.",
             "All score values must be from the allowed set.",
             "overall_reason must be concise and must not include chain-of-thought, detailed derivations, or long ambiguity analysis.",
             "If uncertain, choose conservative lower scores rather than explaining uncertainty at length.",
