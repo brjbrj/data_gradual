@@ -142,6 +142,70 @@ def _normalize_steps(steps: Any) -> List[str]:
     return outputs
 
 
+def _decode_json_string_fragment(value: str) -> str:
+    try:
+        return str(json.loads(f'"{value}"'))
+    except Exception:
+        return value.replace('\\"', '"').replace("\\n", " ")
+
+
+def _extract_keyed_string(raw_output: str, keys: Sequence[str]) -> str:
+    for key in keys:
+        match = re.search(
+            rf'"{re.escape(key)}"\s*:\s*"((?:\\.|[^"\\])*)"',
+            raw_output,
+            flags=re.DOTALL,
+        )
+        if match:
+            return normalize_whitespace(_decode_json_string_fragment(match.group(1)))
+        loose_match = re.search(
+            rf'"{re.escape(key)}"\s*:\s*([^,\}}\]]+)',
+            raw_output,
+            flags=re.DOTALL,
+        )
+        if loose_match:
+            return normalize_whitespace(loose_match.group(1).strip().strip('"'))
+    return ""
+
+
+def _extract_steps_from_malformed_json(raw_output: str) -> List[str]:
+    if not raw_output:
+        return []
+    start_match = re.search(r'"steps"\s*:\s*\[', raw_output, flags=re.DOTALL)
+    if not start_match:
+        return []
+
+    start = start_match.end()
+    tail = raw_output[start:]
+    end_candidates = []
+    for pattern in (r'\]\s*,\s*"final_answer"', r'\]\s*,\s*"answer"', r'\]\s*\}'):
+        match = re.search(pattern, tail, flags=re.DOTALL)
+        if match:
+            end_candidates.append(match.start())
+    if end_candidates:
+        steps_fragment = tail[: min(end_candidates)]
+    else:
+        final_key = re.search(r',\s*"(?:final_answer|answer)"\s*:', tail, flags=re.DOTALL)
+        steps_fragment = tail[: final_key.start()] if final_key else tail
+
+    quoted_items = re.findall(r'"((?:\\.|[^"\\])*)"', steps_fragment, flags=re.DOTALL)
+    recovered = [
+        normalize_whitespace(_decode_json_string_fragment(item))
+        for item in quoted_items
+    ]
+    recovered = [item for item in recovered if item]
+    if recovered:
+        return recovered
+
+    # Last resort for badly truncated arrays that no longer contain quoted strings.
+    lines = re.split(r"\n+|(?<=[.;])\s+", steps_fragment)
+    return [
+        normalize_whitespace(line.strip().strip(",[]\"'"))
+        for line in lines
+        if normalize_whitespace(line.strip().strip(",[]\"'"))
+    ]
+
+
 def _parse_victim_output(raw_output: str) -> Dict[str, Any]:
     parsed: Dict[str, Any] = {}
     try:
@@ -152,7 +216,11 @@ def _parse_victim_output(raw_output: str) -> Dict[str, Any]:
         parsed = {}
 
     steps = _normalize_steps(parsed.get("steps"))
+    if not steps:
+        steps = _extract_steps_from_malformed_json(raw_output)
     final_answer = normalize_whitespace(str(parsed.get("final_answer", parsed.get("answer", "")))) if parsed else ""
+    if not final_answer:
+        final_answer = _extract_keyed_string(raw_output, ("final_answer", "answer"))
     if not final_answer:
         final_answer = _extract_final_answer(raw_output)
     return {

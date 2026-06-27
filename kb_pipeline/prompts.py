@@ -139,7 +139,7 @@ def build_step_evaluation_prompt(question: str, reference_answer: str, steps: Li
             "completeness": ["one score per step"],
             "efficiency": ["one score per step"],
             "final_answer_correct": "boolean",
-            "overall_reason": "string",
+            "overall_reason": "one short sentence under 30 words",
         },
         "output_rules": [
             "Return only a valid JSON object.",
@@ -147,6 +147,8 @@ def build_step_evaluation_prompt(question: str, reference_answer: str, steps: Li
             "The i-th score in every list must correspond to the i-th input step.",
             "All score arrays must be compact and presented on a single line, with no line breaks inside the arrays.",
             "All score values must be from the allowed set.",
+            "overall_reason must be concise and must not include chain-of-thought, detailed derivations, or long ambiguity analysis.",
+            "If uncertain, choose conservative lower scores rather than explaining uncertainty at length.",
             "Do not output markdown, prose, or extra commentary.",
             "Do not output any extra keys outside the schema.",
             "If a step is clearly non-mathematical or filler, still score it explicitly using the rubric rather than skipping it.",
