@@ -834,7 +834,7 @@ async def _evaluate_answers_async(
     deduplicate = _parse_bool_env("SCORE_DEDUPLICATE", True)
     fallback_on_exhausted = _parse_bool_env(
         "SCORE_FALLBACK_ON_EXHAUSTED",
-        False,
+        True,
     )
     max_retries = _parse_int_env(
         "SCORE_MAX_RETRIES",
@@ -1005,6 +1005,10 @@ async def _evaluate_answers_async(
         question, reference_answer, step_texts, candidate_short = (
             _step_evaluation_inputs(record)
         )
+        if not step_texts:
+            report = _fallback_step_evaluation(record)
+            report["overall_reason"] = "heuristic_fallback_no_steps"
+            return signature, report, ""
         prompt = build_step_evaluation_prompt(
             question,
             reference_answer,
@@ -1046,6 +1050,18 @@ async def _evaluate_answers_async(
                 signature,
                 _parse_step_evaluation_response(record, raw),
                 "",
+            )
+        except ValueError as exc:
+            if "no steps to score" in str(exc):
+                report = _fallback_step_evaluation(record)
+                report["overall_reason"] = (
+                    "heuristic_fallback_after_empty_step_scores"
+                )
+                return signature, report, ""
+            return (
+                signature,
+                None,
+                f"{type(exc).__name__}: {exc}",
             )
         except Exception as exc:
             return (
