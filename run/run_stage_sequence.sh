@@ -2,11 +2,40 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/run/common_env.sh"
+USER_STAGE_VLLM_MODE="${STAGE_VLLM_MODE-}"
+MODE_WAS_SET=0
+if [[ -n "${STAGE_VLLM_MODE+x}" ]]; then
+  MODE_WAS_SET=1
+fi
+load_pipeline_config "${ROOT_DIR}"
 DATASET_ARG="${1:-${DATASET_NAME:-gsm8k}}"
+if [[ "${MODE_WAS_SET}" -eq 1 ]]; then
+  export STAGE_VLLM_MODE="${USER_STAGE_VLLM_MODE}"
+else
+  export STAGE_VLLM_MODE=managed
+fi
+export STAGE_SEQUENCE_VLLM_MODE="${STAGE_VLLM_MODE}"
+if [[ "${STAGE_VLLM_MODE}" == "managed" ]]; then
+  export STAGE_VLLM_STOP_ON_EXIT="${STAGE_VLLM_STOP_ON_EXIT:-0}"
+  STAGE_SEQUENCE_PID_FILE="${VLLM_PID_FILE:-${OUTPUT_DIR:-${ROOT_DIR}/outputs}/runtime/vllm/vllm.pid}"
+  cleanup_sequence_vllm() {
+    "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${STAGE_SEQUENCE_PID_FILE}" >/dev/null 2>&1 || true
+  }
+  trap cleanup_sequence_vllm EXIT INT TERM
+fi
 
 echo "[stage-sequence] dataset=${DATASET_ARG}"
 echo "[stage-sequence] STAGE_VLLM_MODE=${STAGE_VLLM_MODE:-external}"
-echo "[stage-sequence] If different stages use different models, start/switch vLLM before the corresponding numbered script."
+if [[ "${STAGE_VLLM_MODE}" == "managed" ]]; then
+  echo "[stage-sequence] managed mode: stages will start/switch vLLM automatically and stop it when the sequence exits."
+  if [[ "${MODE_WAS_SET}" -eq 0 ]]; then
+    echo "[stage-sequence] set STAGE_VLLM_MODE=external to use a manually started vLLM server instead."
+  fi
+else
+  echo "[stage-sequence] external mode: start/switch vLLM before each model-dependent stage."
+fi
 
 bash "${ROOT_DIR}/run/01_build_kb.sh" "${DATASET_ARG}"
 bash "${ROOT_DIR}/run/02_answer_seed.sh" "${DATASET_ARG}"

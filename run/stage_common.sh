@@ -7,6 +7,9 @@ source "${STAGE_ROOT_DIR}/run/common_env.sh"
 
 stage_init() {
   load_pipeline_config "${STAGE_ROOT_DIR}"
+  if [[ -n "${STAGE_SEQUENCE_VLLM_MODE:-}" ]]; then
+    export STAGE_VLLM_MODE="${STAGE_SEQUENCE_VLLM_MODE}"
+  fi
   activate_pipeline_env
   PYTHON_BIN="$(resolve_pipeline_python)"
   export PYTHON_BIN

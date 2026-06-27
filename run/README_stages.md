@@ -21,6 +21,28 @@ ${OUTPUT_DIR}/pipeline/${DATASET_NAME}
 The vLLM check calls `/v1/models` with `Authorization: Bearer ${VLLM_API_KEY}`.
 It accepts full paths, trailing slashes, and basename-only model IDs as matches.
 
+## Full Pipeline Compatibility
+
+The legacy entrypoint is still supported:
+
+```bash
+bash run/run_full_pipeline.sh gsm8k
+```
+
+Unlike an individual numbered stage, the full pipeline wrapper defaults to
+managed vLLM mode when `STAGE_VLLM_MODE` is not set. It starts or switches the
+served model before each model-dependent stage and stops the managed service
+when the sequence exits.
+
+To use a manually started vLLM service instead:
+
+```bash
+STAGE_VLLM_MODE=external bash run/run_full_pipeline.sh gsm8k
+```
+
+In external mode you are responsible for switching the served model between
+stages such as victim answering and Qwen-based generation/validation.
+
 ## Resume Policy
 
 Resume is enabled by default:

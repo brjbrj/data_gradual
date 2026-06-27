@@ -147,6 +147,16 @@ bash run/run_generate_questions.sh gsm8k
 bash run/run_validate_generated.sh gsm8k
 ```
 
+`run_full_pipeline.sh` 仍然兼容，而且默认使用 managed vLLM 模式：一条命令会按阶段自动启动或切换所需模型，并在全流程退出时关闭由脚本启动的 vLLM。
+
+如果你已经在外部手动启动 vLLM，希望脚本只检查现有服务，可以显式使用：
+
+```bash
+STAGE_VLLM_MODE=external bash run/run_full_pipeline.sh gsm8k
+```
+
+外部模式下，如果不同阶段使用不同模型，需要你在对应阶段前手动切换 vLLM。
+
 ## 主要配置文件
 
 配置文件：

@@ -106,7 +106,16 @@ bash run/run_full_pipeline.sh gsm8k
 bash run/run_generate_questions.sh gsm8k
 ```
 
-They now delegate to the numbered stage scripts.
+`run_full_pipeline.sh` delegates to the numbered stage sequence. By default it
+uses managed vLLM mode so one command can start/switch the stage-specific model
+and stop vLLM when the sequence exits. If you already started vLLM manually, run:
+
+```bash
+STAGE_VLLM_MODE=external bash run/run_full_pipeline.sh gsm8k
+```
+
+In external mode, you must switch vLLM yourself before each stage that requires
+a different served model.
 
 ## Validation configuration
 
