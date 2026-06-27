@@ -963,18 +963,18 @@ async def _evaluate_answers_async(
     )
     min_tokens = max(
         64,
-        _parse_int_env("SCORE_MIN_TOKENS", default=256),
+        _parse_int_env("SCORE_MIN_TOKENS", default=1200),
     )
     tokens_per_step = max(
         8,
         _parse_int_env(
             "SCORE_TOKENS_PER_STEP",
-            default=24,
+            default=96,
         ),
     )
     max_tokens_cap = max(
         min_tokens,
-        _parse_int_env("SCORE_MAX_TOKENS", default=900),
+        _parse_int_env("SCORE_MAX_TOKENS", default=2048),
     )
 
     base_url = (
@@ -1059,10 +1059,14 @@ async def _evaluate_answers_async(
     if failures_path is not None:
         failures_path.parent.mkdir(parents=True, exist_ok=True)
         failures_handle = failures_path.open(
-            "a",
+            "w",
             encoding="utf-8",
             buffering=1,
         )
+
+    last_score_inputs: Dict[str, Dict[str, Any]] = {}
+    last_score_raw_outputs: Dict[str, str] = {}
+    last_score_parsed_outputs: Dict[str, Any] = {}
 
     def save_report(report: Dict[str, Any]) -> None:
         if checkpoint_handle is None:
@@ -1112,6 +1116,10 @@ async def _evaluate_answers_async(
             "is_correct": bool(record.get("is_correct")),
             "raw_output_prefix": normalize_whitespace(
                 str(record.get("raw_output", ""))[:2000]
+            ),
+            "score_model_input": last_score_inputs.get(
+                signature,
+                {},
             ),
             "raw_score_output_prefix": normalize_whitespace(
                 last_score_raw_outputs.get(signature, "")[:4000]
@@ -1184,8 +1192,6 @@ async def _evaluate_answers_async(
 
     request_total = len(pending_signatures)
     saved_requests = total - resumed - request_total
-    last_score_raw_outputs: Dict[str, str] = {}
-    last_score_parsed_outputs: Dict[str, Any] = {}
     print(
         f"[score] records={total} unique_requests={request_total} "
         f"resumed={resumed} dedup_saved={saved_requests} "
@@ -1233,7 +1239,7 @@ async def _evaluate_answers_async(
                 max_tokens_cap,
                 max(
                     min_tokens,
-                    96 + tokens_per_step * len(step_texts),
+                    256 + tokens_per_step * len(step_texts),
                 ),
             ),
         }
@@ -1247,6 +1253,15 @@ async def _evaluate_answers_async(
                     "enable_thinking": False
                 }
             }
+        last_score_inputs[signature] = {
+            "model": request["model"],
+            "messages": prompt,
+            "temperature": request["temperature"],
+            "top_p": request["top_p"],
+            "max_tokens": request["max_tokens"],
+            "response_format": request.get("response_format"),
+            "extra_body": request.get("extra_body"),
+        }
         try:
             async with semaphore:
                 response = (
