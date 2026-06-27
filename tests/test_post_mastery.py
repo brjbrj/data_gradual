@@ -9,8 +9,8 @@ from unittest.mock import patch
 from kb_pipeline.post_mastery_generate import (
     _build_prompt,
     _classify_failure,
+    _plan_alignment_error,
     _parse_generated_output,
-    _similarity_score,
     generate_post_mastery_questions,
 )
 from kb_pipeline.post_mastery_plan import (
@@ -56,13 +56,6 @@ class GeneratedOutputParsingTests(unittest.TestCase):
         self.assertEqual(len(parsed["steps"]), 2)
         self.assertEqual(parsed["answer"], "9999")
 
-    def test_number_only_variants_are_similar(self) -> None:
-        score = _similarity_score(
-            "A shop packs 12 items into 3 boxes. How many items are in each box?",
-            "A shop packs 20 items into 5 boxes. How many items are in each box?",
-        )
-        self.assertGreaterEqual(score, 0.88)
-
     def test_prompt_treats_kb_as_optional(self) -> None:
         prompt = _build_prompt(
             "A seed problem.",
@@ -82,8 +75,8 @@ class GeneratedOutputParsingTests(unittest.TestCase):
 
     def test_failure_classification(self) -> None:
         self.assertEqual(
-            _classify_failure("question is too similar to an earlier generated question"),
-            "similarity",
+            _classify_failure("question does not reflect the assigned plan scene"),
+            "plan_mismatch",
         )
         self.assertEqual(
             _classify_failure("response is not a valid JSON object"),
@@ -92,6 +85,35 @@ class GeneratedOutputParsingTests(unittest.TestCase):
         self.assertEqual(
             _classify_failure("TimeoutError: timed out"),
             "request_error",
+        )
+
+    def test_generation_alignment_checks_plan_scene_only(self) -> None:
+        plan = {
+            "knowledge": {
+                "diversity": {
+                    "primary_scene": {
+                        "domain": "community_library",
+                        "setting": "a neighborhood library",
+                        "roles": ["librarian"],
+                        "objects": ["books", "shelves"],
+                    }
+                },
+                "kb_inspiration": {"scene_keywords": ["returns"]},
+            }
+        }
+        parsed = {
+            "question": "A librarian places 6 books on each of 4 shelves. How many books are placed?",
+            "steps": ["6 * 4 = 24"],
+            "answer": "24",
+        }
+        self.assertEqual(_plan_alignment_error(parsed, plan, "Equal"), "")
+        unrelated = {
+            **parsed,
+            "question": "A baker fills 6 trays with 4 rolls each. How many rolls are there?",
+        }
+        self.assertEqual(
+            _plan_alignment_error(unrelated, plan, "Equal"),
+            "question does not reflect the assigned plan scene or inspiration keywords",
         )
 
     def test_batch_round_retries_only_failed_item(self) -> None:
@@ -226,7 +248,7 @@ class SynthesisPlanTests(unittest.TestCase):
         self.assertEqual(len(domains), 4)
         self.assertNotIn("question_template", plan[0]["knowledge"])
 
-    def test_only_similarity_failure_replans(self) -> None:
+    def test_only_validation_failures_replan(self) -> None:
         mastery = [
             {
                 "task_id": 1,
@@ -251,9 +273,14 @@ class SynthesisPlanTests(unittest.TestCase):
         ]
         plan = build_post_mastery_plan(mastery, kb_records, [])[0]
         same_plan = replan_failed_plan(plan, "request_error", 1)
-        new_plan = replan_failed_plan(plan, "similarity", 1)
+        plan_mismatch = replan_failed_plan(plan, "plan_mismatch", 1)
+        new_plan = replan_failed_plan(plan, "stubborn_validation", 1)
         self.assertEqual(
             same_plan["knowledge"]["diversity"]["plan_signature"],
+            plan["knowledge"]["diversity"]["plan_signature"],
+        )
+        self.assertEqual(
+            plan_mismatch["knowledge"]["diversity"]["plan_signature"],
             plan["knowledge"]["diversity"]["plan_signature"],
         )
         self.assertNotEqual(
@@ -262,7 +289,7 @@ class SynthesisPlanTests(unittest.TestCase):
         )
         self.assertEqual(
             new_plan["knowledge"]["diversity"]["replan_reason"],
-            "similarity",
+            "stubborn_validation",
         )
 
     def test_stubborn_validation_failure_replans(self) -> None:

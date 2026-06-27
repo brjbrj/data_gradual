@@ -47,6 +47,12 @@ Stage behavior:
 | `06_validate_generated.sh` | Saves canonical validation files after each validation round; skips if validated outputs already exist. |
 | `07_export_training_data.sh` | Skips if train output and summary already exist. |
 
+Responsibility split:
+
+- `04_build_synthesis_plan.sh` is the diversity/similarity-control stage. It chooses knowledge focus, scene, problem pattern, target difficulty, and number strategy.
+- `05_generate_questions.sh` only follows the plan and emits parseable `question`, `steps`, and numeric `answer`; it does not perform global similarity filtering.
+- `06_validate_generated.sh` performs correctness, solvability, uniqueness, difficulty, repair, regeneration, and replan after repeated validation failures.
+
 Useful checkpoint knobs:
 
 ```bash

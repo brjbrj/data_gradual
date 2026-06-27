@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import ast
 import asyncio
-import difflib
 import json
 import os
 import re
@@ -296,59 +295,94 @@ def _parse_generated_output(raw: str) -> Tuple[Optional[Dict[str, Any]], str]:
     }, ""
 
 
-def _question_key(question: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", question.lower())
+def _keyword_tokens(values: Sequence[Any]) -> set[str]:
+    tokens: set[str] = set()
+    for value in values:
+        if isinstance(value, dict):
+            nested: List[Any] = []
+            for nested_value in value.values():
+                if isinstance(nested_value, list):
+                    nested.extend(nested_value)
+                else:
+                    nested.append(nested_value)
+            tokens.update(_keyword_tokens(nested))
+            continue
+        for token in re.findall(r"[a-z]+", str(value).lower()):
+            if len(token) >= 4:
+                tokens.add(token)
+    return tokens
 
 
-def _surface_signature(question: str) -> str:
-    text = question.lower()
-    text = re.sub(r"\$?\d[\d,.]*(?:%|gb|mph)?", "<number>", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+def _as_sequence(value: Any) -> List[Any]:
+    if isinstance(value, list):
+        return value
+    if value is None or value == "":
+        return []
+    return [value]
 
 
-def _content_tokens(question: str) -> set[str]:
-    stopwords = {
-        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
-        "has", "have", "he", "her", "his", "how", "if", "in", "is", "it",
-        "of", "on", "or", "she", "that", "the", "their", "they", "this",
-        "to", "was", "what", "when", "which", "who", "with",
-    }
-    return {
-        token
-        for token in re.findall(r"[a-z]+", question.lower())
-        if token not in stopwords and len(token) > 2
-    }
-
-
-def _similarity_score(question_a: str, question_b: str) -> float:
-    signature_score = difflib.SequenceMatcher(
-        None,
-        _surface_signature(question_a),
-        _surface_signature(question_b),
-    ).ratio()
-    tokens_a = _content_tokens(question_a)
-    tokens_b = _content_tokens(question_b)
-    token_score = (
-        len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
-        if tokens_a and tokens_b
-        else 0.0
+def _scene_tokens(scene: Dict[str, Any]) -> set[str]:
+    return _keyword_tokens(
+        [
+            scene.get("domain", ""),
+            scene.get("setting", ""),
+            *_as_sequence(scene.get("roles")),
+            *_as_sequence(scene.get("objects")),
+            *_as_sequence(scene.get("units")),
+        ]
     )
-    return max(signature_score, token_score)
 
 
-def _find_similar_question(
-    candidate: str,
-    seen_questions: Sequence[str],
-    threshold: float,
-) -> Optional[str]:
-    candidate_key = _question_key(candidate)
-    for previous in seen_questions:
-        if candidate_key == _question_key(previous):
-            return previous
-        if _similarity_score(candidate, previous) >= threshold:
-            return previous
-    return None
+def _plan_alignment_error(
+    parsed: Dict[str, Any],
+    plan: Dict[str, Any],
+    difficulty: str,
+) -> str:
+    """Check only lightweight generation-stage obligations.
+
+    Planning owns diversity and similarity. Validation owns mathematical
+    correctness, exact difficulty, solvability, and repairs. Generation only
+    needs to produce parseable fields and visibly follow the assigned plan.
+    """
+    question = str(parsed.get("question") or "")
+    steps = _normalize_steps(parsed.get("steps", []))
+    answer = _normalize_answer(parsed.get("answer", ""))
+    if not question or not steps or not answer:
+        return "missing generated question, steps, or numeric answer"
+
+    knowledge = plan.get("knowledge", {}) if isinstance(plan, dict) else {}
+    diversity = knowledge.get("diversity", {}) if isinstance(knowledge, dict) else {}
+    primary_scene = diversity.get("primary_scene", {})
+    alternative_scenes = diversity.get("alternative_scenes", [])
+    inspiration = knowledge.get("kb_inspiration", {}) if isinstance(knowledge, dict) else {}
+
+    plan_tokens = set()
+    if isinstance(primary_scene, dict):
+        plan_tokens.update(_scene_tokens(primary_scene))
+    for scene in alternative_scenes if isinstance(alternative_scenes, list) else []:
+        if isinstance(scene, dict):
+            plan_tokens.update(_scene_tokens(scene))
+    plan_tokens.update(
+        _keyword_tokens(
+            [
+                *_as_sequence(inspiration.get("scene_keywords")),
+                *_as_sequence(inspiration.get("possible_roles")),
+                *_as_sequence(inspiration.get("possible_units")),
+            ]
+        )
+    )
+    if plan_tokens:
+        question_tokens = _keyword_tokens([question])
+        if not (question_tokens & plan_tokens):
+            return "question does not reflect the assigned plan scene or inspiration keywords"
+
+    # A very broad structural guard only. Exact difficulty and step validity are
+    # intentionally deferred to validation because plans are not rigid templates.
+    if difficulty == "Hard" and len(steps) < 2:
+        return "hard target produced too few reasoning steps"
+    if difficulty == "Easy" and len(steps) > 5:
+        return "easy target produced too many reasoning steps"
+    return ""
 
 
 def _should_log_progress(done: int, total: int) -> bool:
@@ -371,12 +405,12 @@ def _format_seconds(value: float) -> str:
 
 def _classify_failure(error: str) -> str:
     normalized = str(error or "").lower()
-    if "too similar" in normalized or "duplicate" in normalized:
-        return "similarity"
-    if "not a valid json" in normalized:
+    if "not a valid json" in normalized or "not valid json" in normalized:
         return "invalid_json"
     if "missing or invalid fields" in normalized:
         return "missing_fields"
+    if "plan" in normalized or "scene" in normalized or "reasoning steps" in normalized:
+        return "plan_mismatch"
     if any(
         marker in normalized
         for marker in (
@@ -394,8 +428,6 @@ def _classify_failure(error: str) -> str:
 
 
 def _next_action(failure_type: str) -> str:
-    if failure_type == "similarity":
-        return "replan"
     return "reuse_plan"
 
 
@@ -551,7 +583,6 @@ async def _generate_all_async(
     top_p_map: Dict[str, float],
     enable_thinking: bool,
     force_json: bool,
-    similarity_threshold: float,
     output_path: Optional[Path],
     raw_output_path: Optional[Path],
     failed_output_path: Optional[Path],
@@ -568,8 +599,6 @@ async def _generate_all_async(
 
     mastery = _mastery_lookup(mastery_records)
     semaphore = asyncio.Semaphore(max(1, concurrency))
-    seen_questions: List[str] = []
-    seen_lock = asyncio.Lock()
     client = AsyncOpenAI(
         base_url=base_url.rstrip("/"),
         api_key=api_key,
@@ -640,19 +669,10 @@ async def _generate_all_async(
             parsed, error = _parse_generated_output(raw_output)
             if parsed:
                 candidate_question = parsed["question"]
-                async with seen_lock:
-                    similar_question = _find_similar_question(
-                        candidate_question,
-                        seen_questions,
-                        similarity_threshold,
-                    )
-                    if similar_question:
-                        parsed = None
-                        error = (
-                            "question is too similar to an earlier generated question"
-                        )
-                    else:
-                        seen_questions.append(candidate_question)
+                alignment_error = _plan_alignment_error(parsed, plan, difficulty)
+                if alignment_error:
+                    parsed = None
+                    error = alignment_error
             if parsed:
                 record = {
                     "source_task_id": source_task_id,
@@ -899,7 +919,6 @@ def generate_post_mastery_questions(
     top_p_map: Optional[Dict[str, float]] = None,
     enable_thinking: Optional[bool] = None,
     force_json: Optional[bool] = None,
-    similarity_threshold: Optional[float] = None,
     output_path: Optional[Path] = None,
     raw_output_path: Optional[Path] = None,
     failed_output_path: Optional[Path] = None,
@@ -953,9 +972,6 @@ def generate_post_mastery_questions(
             force_json=force_json
             if force_json is not None
             else _parse_bool_env("GEN_FORCE_JSON", False),
-            similarity_threshold=similarity_threshold
-            if similarity_threshold is not None
-            else _parse_float_env("GEN_SIMILARITY_THRESHOLD", 0.88),
             output_path=output_path,
             raw_output_path=raw_output_path,
             failed_output_path=failed_output_path,

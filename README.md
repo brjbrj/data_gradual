@@ -10,8 +10,8 @@ Chinese documentation: [README.zh.md](./README.zh.md)
 2. Let the victim model answer each seed question `N` times using only the question.
 3. Compare numeric answers and score victim-provided reasoning steps.
 4. Compute mastery and assign five-level relative difficulty plus synthesis count.
-5. Build a diversity-oriented synthesis plan.
-6. Generate question, steps, and answer asynchronously.
+5. Build a diversity-oriented synthesis plan: knowledge, scene, problem pattern, relative difficulty, and diversity are decided here.
+6. Generate question, steps, and answer asynchronously from the plan. This stage only checks parseable fields and lightweight plan alignment; it does not run global similarity filtering.
 7. Run deterministic prechecks.
 8. Produce two independent blind solutions; add a tie-break vote when needed.
 9. Audit correctness, solvability, uniqueness, steps, and relative difficulty.
@@ -63,6 +63,13 @@ Stage model requirements:
 
 For example, if stage 2 uses Llama and stages 3/5/6 use Qwen, start or switch
 the external vLLM server before each model-dependent stage.
+
+### Stage Responsibilities
+
+- `04_build_synthesis_plan.sh` owns diversity and similarity prevention. It selects the knowledge focus, scene, variation mode, number strategy, problem pattern, target difficulty, and synthesis count.
+- `05_generate_questions.sh` only realizes each plan into `question`, `steps`, and numeric `answer`. Its checks are limited to JSON/field parsing and lightweight plan alignment, such as whether the generated question reflects the assigned scene or inspiration keywords.
+- `06_validate_generated.sh` owns mathematical correctness, solvability, uniqueness, exact relative difficulty, repair, regeneration, and eventual replan after repeated failures.
+- Generate-stage failures caused by invalid JSON, missing fields, or plan mismatch stay in the generation failed queue and retry the same plan. Validation-stage stubborn failures can regenerate from a repaired plan through `replan_failed_plan`.
 
 ### Resume And Rerun
 
@@ -221,6 +228,7 @@ Repair actions:
 - `repair_question`: minimally fix ambiguity, missing conditions, uniqueness, or difficulty.
 - `regenerate_question`: create a fresh problem from the plan.
 - request errors: keep the candidate and retry validation next round.
+- repeated validation failures: replan the diversity assignment, then regenerate.
 
 Every repaired candidate must pass a fresh blind solve and audit round.
 

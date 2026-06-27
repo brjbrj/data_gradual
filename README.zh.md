@@ -1,4 +1,4 @@
-﻿# data_gradual_new
+# data_gradual_new
 
 这是一个独立的渐进式数学数据合成项目。项目保留了原始的 mastery 计算、合成数量分配和相对难度分配逻辑，并在当前目录中实现了后续的计划构建、题目生成、盲解验证、定向修复和训练数据导出流程。
 
@@ -186,7 +186,6 @@ GEN_MAX_RETRIES=3
 GEN_MAX_TOKENS=900
 GEN_FORCE_JSON=1
 GEN_ENABLE_THINKING=0
-GEN_SIMILARITY_THRESHOLD=0.88
 GEN_ROUND_RETRY_DELAY=1
 GEN_RESUME=1
 GEN_CHECKPOINT_EVERY=50
@@ -260,6 +259,13 @@ outputs/planning/<dataset>/synthesis_plan.jsonl
 - `math`：目标数学能力、操作序列、相对难度等。
 - `diversity`：主场景、备选场景、叙事风格、数值策略等。
 - `kb_inspiration`：知识库提供的可选灵感，不要求照搬原题。
+
+职责边界：
+
+- `04_build_synthesis_plan.sh` 负责多样性和相似性预防，包括知识点选择、场景构建、问题模式、难度预设、数值策略和生成数量。
+- `05_generate_questions.sh` 只负责根据 plan 生成题目、步骤和数值答案，并做轻量结构检查：JSON 是否可解析、字段是否齐全、答案是否为数值、题面是否体现 plan 的场景或关键词。不再做全局相似度扫描。
+- `06_validate_generated.sh` 负责后置校验，包括数学正确性、可解性、唯一答案、难度匹配、多轮修复、重新生成；多次失败后再回退到 replan，重新调整 plan 后继续生成。
+- generate 阶段的失败队列只处理格式错误、字段缺失、未按 plan 输出等问题；相似性控制应在 plan/replan 阶段完成。
 
 ## 生成输出
 
