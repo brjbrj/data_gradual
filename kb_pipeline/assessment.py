@@ -1010,11 +1010,97 @@ async def _evaluate_answers_async(
             buffering=1,
         )
 
+    failures_path_env = os.environ.get("SCORE_FAILURES_PATH", "").strip()
+    failures_path = (
+        Path(failures_path_env)
+        if failures_path_env
+        else (
+            checkpoint_path.with_name(checkpoint_path.name + ".failures.jsonl")
+            if checkpoint_path is not None
+            else None
+        )
+    )
+    failures_handle = None
+    if failures_path is not None:
+        failures_path.parent.mkdir(parents=True, exist_ok=True)
+        failures_handle = failures_path.open(
+            "a",
+            encoding="utf-8",
+            buffering=1,
+        )
+
     def save_report(report: Dict[str, Any]) -> None:
         if checkpoint_handle is None:
             return
         checkpoint_handle.write(
             json.dumps(report, ensure_ascii=False) + "\n"
+        )
+
+    def failure_record(
+        *,
+        signature: str,
+        round_index: int,
+        event: str,
+        error: str,
+    ) -> Dict[str, Any]:
+        representative_index = signature_groups[signature][0]
+        record = answer_records[representative_index]
+        question, reference_answer, step_texts, candidate_short = (
+            _step_evaluation_inputs(record)
+        )
+        parsed_output = (
+            record.get("parsed_output", {})
+            if isinstance(record.get("parsed_output"), dict)
+            else {}
+        )
+        return {
+            "timestamp": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ",
+                time.gmtime(),
+            ),
+            "stage": "score",
+            "event": event,
+            "round": round_index,
+            "signature": signature,
+            "group_size": len(signature_groups[signature]),
+            "task_id": record.get("task_id"),
+            "source_task_id": record.get("source_task_id"),
+            "attempt_index": record.get("attempt_index", 0),
+            "error": error,
+            "question": question,
+            "reference_answer": reference_answer,
+            "candidate_final_answer": candidate_short,
+            "step_count": len(step_texts),
+            "steps": step_texts,
+            "parsed_output": parsed_output,
+            "extracted_answer": record.get("extracted_answer", ""),
+            "is_correct": bool(record.get("is_correct")),
+            "raw_output_prefix": normalize_whitespace(
+                str(record.get("raw_output", ""))[:2000]
+            ),
+            "model": model,
+        }
+
+    def save_failure(
+        *,
+        signature: str,
+        round_index: int,
+        event: str,
+        error: str,
+    ) -> None:
+        if failures_handle is None:
+            return
+        failures_handle.write(
+            json.dumps(
+                failure_record(
+                    signature=signature,
+                    round_index=round_index,
+                    event=event,
+                    error=error,
+                ),
+                ensure_ascii=False,
+            )
+            + "\n"
         )
 
     completed = resumed
@@ -1061,7 +1147,8 @@ async def _evaluate_answers_async(
         f"fallback={fallback_on_exhausted} "
         f"max_tokens_cap={max_tokens_cap} "
         f"progress_every={progress_every} "
-        f"progress_interval={progress_interval:g}s",
+        f"progress_interval={progress_interval:g}s "
+        f"failures_path={failures_path if failures_path is not None else '<none>'}",
         flush=True,
     )
 
@@ -1206,6 +1293,12 @@ async def _evaluate_answers_async(
                     round_done += 1
                     if report is None:
                         last_errors[signature] = error
+                        save_failure(
+                            signature=signature,
+                            round_index=round_index,
+                            event="retry_pending",
+                            error=error,
+                        )
                         next_pending.append(signature)
                         round_errors += 1
                     else:
@@ -1289,12 +1382,19 @@ async def _evaluate_answers_async(
             )
             for signature in pending:
                 representative_index = signature_groups[signature][0]
+                final_error = last_errors.get(signature, "unknown error")
+                save_failure(
+                    signature=signature,
+                    round_index=round_index,
+                    event="fallback_after_retries",
+                    error=final_error,
+                )
                 report = _fallback_step_evaluation(
                     answer_records[representative_index]
                 )
                 report["overall_reason"] = (
                     "heuristic_fallback_after_retries: "
-                    + last_errors.get(signature, "unknown error")
+                    + final_error
                 )
                 for index in signature_groups[signature]:
                     if outputs[index] is not None:
@@ -1309,6 +1409,8 @@ async def _evaluate_answers_async(
     finally:
         if checkpoint_handle is not None:
             checkpoint_handle.close()
+        if failures_handle is not None:
+            failures_handle.close()
         await async_client.close()
 
     print(
