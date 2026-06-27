@@ -6,9 +6,16 @@ STAGE_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${STAGE_ROOT_DIR}/run/common_env.sh"
 
 stage_init() {
+  local user_stage_vllm_mode="${STAGE_VLLM_MODE-}"
+  local user_stage_vllm_mode_set=0
+  if [[ -n "${STAGE_VLLM_MODE+x}" ]]; then
+    user_stage_vllm_mode_set=1
+  fi
   load_pipeline_config "${STAGE_ROOT_DIR}"
   if [[ -n "${STAGE_SEQUENCE_VLLM_MODE:-}" ]]; then
     export STAGE_VLLM_MODE="${STAGE_SEQUENCE_VLLM_MODE}"
+  elif [[ "${user_stage_vllm_mode_set}" -eq 1 ]]; then
+    export STAGE_VLLM_MODE="${user_stage_vllm_mode}"
   fi
   activate_pipeline_env
   PYTHON_BIN="$(resolve_pipeline_python)"
@@ -195,8 +202,15 @@ stage_ensure_vllm() {
   fi
 
   local mode="${STAGE_VLLM_MODE:-external}"
-  local timeout="${STAGE_VLLM_WAIT_TIMEOUT:-0}"
-  local poll="${STAGE_VLLM_POLL_SEC:-${VLLM_EXTERNAL_POLL_SEC:-5}}"
+  local timeout
+  local poll
+  if [[ "${mode}" == "managed" ]]; then
+    timeout="${STAGE_VLLM_WAIT_TIMEOUT:-${VLLM_START_TIMEOUT:-900}}"
+    poll="${STAGE_VLLM_POLL_SEC:-${VLLM_START_POLL_SEC:-5}}"
+  else
+    timeout="${STAGE_VLLM_WAIT_TIMEOUT:-${VLLM_EXTERNAL_WAIT_TIMEOUT:-0}}"
+    poll="${STAGE_VLLM_POLL_SEC:-${VLLM_EXTERNAL_POLL_SEC:-5}}"
+  fi
   stage_log "stage vLLM mode=${mode} label=${label} expected=${expected}"
 
   if [[ "${mode}" == "skip" ]]; then
@@ -228,10 +242,10 @@ stage_ensure_vllm() {
       return 0
     fi
     if [[ "${timeout}" -ge 0 && "${waited}" -ge "${timeout}" ]]; then
-      stage_log "vLLM is not ready for ${label}; start the expected model externally or set STAGE_VLLM_MODE=managed"
+      stage_log "vLLM is not ready for ${label} after ${waited}s; check ${mode} startup logs or increase STAGE_VLLM_WAIT_TIMEOUT"
       return 1
     fi
-    stage_log "waiting for external vLLM ${label} (${waited}s/${timeout}s)"
+    stage_log "waiting for ${mode} vLLM ${label} (${waited}s/${timeout}s)"
     sleep "${poll}"
     waited=$((waited + poll))
   done
