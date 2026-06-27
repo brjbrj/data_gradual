@@ -1078,6 +1078,16 @@ async def _evaluate_answers_async(
             "raw_output_prefix": normalize_whitespace(
                 str(record.get("raw_output", ""))[:2000]
             ),
+            "raw_score_output_prefix": normalize_whitespace(
+                last_score_raw_outputs.get(signature, "")[:4000]
+            ),
+            "parsed_score_output": last_score_parsed_outputs.get(
+                signature,
+                {},
+            ),
+            "score_output_parseable": bool(
+                last_score_parsed_outputs.get(signature)
+            ),
             "model": model,
         }
 
@@ -1139,6 +1149,8 @@ async def _evaluate_answers_async(
 
     request_total = len(pending_signatures)
     saved_requests = total - resumed - request_total
+    last_score_raw_outputs: Dict[str, str] = {}
+    last_score_parsed_outputs: Dict[str, Any] = {}
     print(
         f"[score] records={total} unique_requests={request_total} "
         f"resumed={resumed} dedup_saved={saved_requests} "
@@ -1154,6 +1166,7 @@ async def _evaluate_answers_async(
 
     async def evaluate_signature(
         signature: str,
+        round_index: int,
     ) -> Tuple[str, Optional[Dict[str, Any]], str]:
         representative_index = signature_groups[signature][0]
         record = answer_records[representative_index]
@@ -1161,6 +1174,12 @@ async def _evaluate_answers_async(
             _step_evaluation_inputs(record)
         )
         if not step_texts:
+            save_failure(
+                signature=signature,
+                round_index=round_index,
+                event="fallback_no_candidate_steps",
+                error="no candidate steps parsed before scoring",
+            )
             report = _fallback_step_evaluation(record)
             report["overall_reason"] = "heuristic_fallback_no_steps"
             return signature, report, ""
@@ -1201,6 +1220,10 @@ async def _evaluate_answers_async(
                     )
                 )
             raw = response.choices[0].message.content or ""
+            last_score_raw_outputs[signature] = raw
+            last_score_parsed_outputs[signature] = (
+                safe_json_from_text(raw) or {}
+            )
             return (
                 signature,
                 _parse_step_evaluation_response(record, raw),
@@ -1208,6 +1231,12 @@ async def _evaluate_answers_async(
             )
         except ValueError as exc:
             if "no steps to score" in str(exc):
+                save_failure(
+                    signature=signature,
+                    round_index=round_index,
+                    event="fallback_after_empty_step_scores",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
                 report = _fallback_step_evaluation(record)
                 report["overall_reason"] = (
                     "heuristic_fallback_after_empty_step_scores"
@@ -1241,7 +1270,7 @@ async def _evaluate_answers_async(
             )
             tasks = {
                 asyncio.create_task(
-                    evaluate_signature(signature)
+                    evaluate_signature(signature, round_index)
                 )
                 for signature in pending
             }
