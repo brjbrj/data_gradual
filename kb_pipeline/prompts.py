@@ -64,7 +64,8 @@ def build_step_evaluation_prompt(question: str, reference_answer: str, steps: Li
     system = (
         "You are a professional evaluator of mathematical problem-solving steps. "
         "You must score each provided step independently and conservatively. "
-        "The input is already segmented by the answer generator, so you must not split, merge, reorder, or rewrite any step. "
+        "The input is already segmented by the answer generator. "
+        "You must evaluate exactly the provided steps as-is, and you must not split, merge, reorder, rewrite, add, or remove any step. "
         "Score strictly according to the rubric, and return only a valid JSON object."
     )
     user = {
@@ -115,7 +116,9 @@ def build_step_evaluation_prompt(question: str, reference_answer: str, steps: Li
             },
         },
         "step_rules": [
-            "Evaluate every step independently.",
+            "Evaluate exactly the provided solution_steps independently.",
+            "Do not re-segment the solution. Do not create your own step decomposition.",
+            "Do not split one provided step into multiple steps, merge multiple provided steps into one, add missing steps, or remove any provided step.",
             "Some elements may not be actual mathematical steps (for example introductory phrases or meta-comments). You must still score every single element.",
             "Do not skip any element, even if it seems redundant, non-mathematical, or incorrectly segmented.",
             "You may use neighboring steps as context when evaluating logical consistency and necessity.",
@@ -129,10 +132,11 @@ def build_step_evaluation_prompt(question: str, reference_answer: str, steps: Li
         ],
         "question": question,
         "reference_answer": reference_answer,
+        "input_step_count": len(steps),
         "solution_steps": steps,
         "final_answer": final_answer,
         "output_schema": {
-            "step_count": "integer",
+            "step_count": f"must equal input_step_count exactly, i.e. {len(steps)}",
             "correctness": ["one score per step"],
             "logical": ["one score per step"],
             "standardization": ["one score per step"],
@@ -143,8 +147,9 @@ def build_step_evaluation_prompt(question: str, reference_answer: str, steps: Li
         },
         "output_rules": [
             "Return only a valid JSON object.",
-            "The number of scores in each list must exactly equal the number of input steps.",
-            "The i-th score in every list must correspond to the i-th input step.",
+            "step_count must equal input_step_count exactly.",
+            "The number of scores in each list must exactly equal input_step_count.",
+            "The i-th score in every list must correspond to the i-th provided solution_steps item.",
             "All score arrays must be compact and presented on a single line, with no line breaks inside the arrays.",
             "All score values must be from the allowed set.",
             "overall_reason must be concise and must not include chain-of-thought, detailed derivations, or long ambiguity analysis.",
