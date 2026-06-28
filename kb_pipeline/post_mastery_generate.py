@@ -530,6 +530,7 @@ def _load_resume_failures(
     failed_output_path: Optional[Path],
     completed_plan_ids: set[str],
     max_retries: int,
+    retry_completed_failures: bool = False,
 ) -> Tuple[List[Dict[str, Any]], set[str], int]:
     if failed_output_path is None or not failed_output_path.exists():
         return [], set(), 0
@@ -544,7 +545,11 @@ def _load_resume_failures(
         failed_plan_id = str(failure.get("plan_id") or "")
         if failed_plan_id:
             failed_plan_ids.add(failed_plan_id)
-        if failed_plan_id and failed_plan_id in completed_plan_ids:
+        if (
+            failed_plan_id
+            and failed_plan_id in completed_plan_ids
+            and not retry_completed_failures
+        ):
             continue
         attempts = int(failure.get("attempts") or 0)
         retry_round = max(1, attempts)
@@ -783,6 +788,10 @@ async def _generate_all_async(
             failed_output_path=failed_output_path,
             completed_plan_ids=completed_plan_ids,
             max_retries=max_retries,
+            retry_completed_failures=_parse_bool_env(
+                "GEN_RETRY_COMPLETED_FAILURES",
+                False,
+            ),
         )
     pending: List[Dict[str, Any]] = [
         {"plan": plan, "previous_failure": None}

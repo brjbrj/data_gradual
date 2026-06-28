@@ -1311,10 +1311,20 @@ async def _run_validation_async(
                     "steps": item["candidate"].get("steps"),
                     "answer": item["candidate"].get("answer"),
                     "round": round_index,
+                    "active_plan": item.get("active_plan"),
                     "validation_report": report,
                     "next_candidate": next(
                         (
                             pending_item["candidate"]
+                            for pending_item in next_pending
+                            if str(pending_item["candidate"].get("plan_id"))
+                            == str(item["candidate"].get("plan_id"))
+                        ),
+                        None,
+                    ),
+                    "next_plan": next(
+                        (
+                            pending_item.get("active_plan")
                             for pending_item in next_pending
                             if str(pending_item["candidate"].get("plan_id"))
                             == str(item["candidate"].get("plan_id"))
