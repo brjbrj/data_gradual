@@ -525,6 +525,53 @@ def _load_existing_generation_state(
     return successes, raw_outputs
 
 
+def _load_resume_failures(
+    *,
+    failed_output_path: Optional[Path],
+    completed_plan_ids: set[str],
+    max_retries: int,
+) -> Tuple[List[Dict[str, Any]], set[str], int]:
+    if failed_output_path is None or not failed_output_path.exists():
+        return [], set(), 0
+
+    pending: List[Dict[str, Any]] = []
+    failed_plan_ids: set[str] = set()
+    next_round = 0
+    infinite_rounds = max_retries < 0
+    for failure in read_jsonl(failed_output_path):
+        if not isinstance(failure, dict):
+            continue
+        failed_plan_id = str(failure.get("plan_id") or "")
+        if failed_plan_id:
+            failed_plan_ids.add(failed_plan_id)
+        if failed_plan_id and failed_plan_id in completed_plan_ids:
+            continue
+        attempts = int(failure.get("attempts") or 0)
+        retry_round = max(1, attempts)
+        if not infinite_rounds and retry_round > max_retries:
+            continue
+        plan = failure.get("next_plan")
+        if not isinstance(plan, dict):
+            original_plan = failure.get("plan")
+            if not isinstance(original_plan, dict):
+                continue
+            plan = replan_failed_plan(
+                original_plan,
+                str(failure.get("failure_type") or "unknown"),
+                retry_round=retry_round,
+            )
+            failure["next_plan"] = plan
+            failure["next_round"] = retry_round
+        pending.append(
+            {
+                "plan": plan,
+                "previous_failure": failure,
+            }
+        )
+        next_round = max(next_round, retry_round)
+    return pending, failed_plan_ids, next_round
+
+
 def _write_generation_checkpoint(
     *,
     output_path: Optional[Path],
@@ -641,7 +688,7 @@ async def _generate_all_async(
             seed_question,
             difficulty,
             knowledge,
-            attempt_index=0,
+            attempt_index=round_index,
             retry_reason=retry_reason,
         )
         request: Dict[str, Any] = {
@@ -724,18 +771,35 @@ async def _generate_all_async(
         cumulative_successes = {}
         cumulative_raw_outputs = {}
     completed_plan_ids = set(cumulative_successes)
+    resume_failed_pending: List[Dict[str, Any]] = []
+    resume_failed_plan_ids: set[str] = set()
+    resume_round_index = 0
+    if resume:
+        (
+            resume_failed_pending,
+            resume_failed_plan_ids,
+            resume_round_index,
+        ) = _load_resume_failures(
+            failed_output_path=failed_output_path,
+            completed_plan_ids=completed_plan_ids,
+            max_retries=max_retries,
+        )
     pending: List[Dict[str, Any]] = [
         {"plan": plan, "previous_failure": None}
         for plan in plans
         if str(plan.get("plan_id")) not in completed_plan_ids
+        and str(plan.get("plan_id")) not in resume_failed_plan_ids
     ]
+    if resume_failed_pending:
+        pending = resume_failed_pending + pending
     final_failures: List[Dict[str, Any]] = []
-    round_index = 0
+    round_index = resume_round_index if resume_failed_pending else 0
     infinite_rounds = max_retries < 0
     summary_path = output_path.with_suffix(".summary.json") if output_path is not None else None
     if completed_plan_ids:
         print(
             f"[generate] resume enabled: loaded_success={len(completed_plan_ids)} "
+            f"loaded_failed_retry={len(resume_failed_pending)} "
             f"remaining={len(pending)}",
             flush=True,
         )
@@ -753,6 +817,12 @@ async def _generate_all_async(
             done_in_round=0,
             checkpoint_reason="resume_loaded",
         )
+    print(
+        f"[generate] config max_retries={max_retries} "
+        f"max_tokens={max_tokens} concurrency={concurrency} "
+        f"force_json={force_json} resume={resume}",
+        flush=True,
+    )
 
     try:
         while pending and (infinite_rounds or round_index <= max_retries):
@@ -952,10 +1022,10 @@ def generate_post_mastery_questions(
             else _parse_int_env("VLLM_TIMEOUT", 600),
             max_retries=max_retries
             if max_retries is not None
-            else _parse_int_env("GEN_MAX_RETRIES", 3),
+            else _parse_int_env("GEN_MAX_RETRIES", 5),
             max_tokens=max_tokens
             if max_tokens is not None
-            else _parse_int_env("GEN_MAX_TOKENS", 640),
+            else _parse_int_env("GEN_MAX_TOKENS", 1200),
             temperature_map=temperature_map
             or _parse_float_map(
                 os.environ.get("GEN_TEMPERATURE_MAP"),
@@ -1055,7 +1125,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "max_retry_rounds": (
                 args.max_retries
                 if args.max_retries is not None
-                else _parse_int_env("GEN_MAX_RETRIES", 3)
+                else _parse_int_env("GEN_MAX_RETRIES", 5)
             ),
             "output": str(output_path),
             "raw_output": str(raw_output_path),
