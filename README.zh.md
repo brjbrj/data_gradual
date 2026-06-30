@@ -1,4 +1,4 @@
-# data_gradual_new
+﻿# data_gradual_new
 
 这是一个独立的渐进式数学数据合成项目。项目保留了原始的 mastery 计算、合成数量分配和相对难度分配逻辑，并在当前目录中实现了后续的计划构建、题目生成、盲解验证、定向修复和训练数据导出流程。
 
@@ -326,6 +326,28 @@ validation.rounds/
 ```
 
 ## 更多阶段说明
+
+## 训练数据导出
+
+最后阶段会将质检通过的 `validated.jsonl` 转换为旧版监督训练 JSONL 格式：
+
+```bash
+bash run/07_export_training_data.sh gsm8k
+```
+
+默认输出位置：
+
+```text
+outputs/pipeline/<dataset>/train.jsonl
+```
+
+每一行严格包含：
+
+```json
+{"instruction":"...","input":"题目","output":"步骤拼接... The answer is $\\boxed{XXX}$."}
+```
+
+其中 `output` 会拼接 validated 记录中的 `steps`，并在末尾按固定格式追加最终答案：`The answer is $\\boxed{XXX}$.`。
 
 详见：
 

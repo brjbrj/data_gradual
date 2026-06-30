@@ -279,3 +279,25 @@ validation.rounds/
 ```
 
 Legacy `quality.py` and `noise.py` are retained for historical comparison. The new flow uses `kb_pipeline/validation.py`.
+
+## Training Export
+
+The final stage converts validated records into the legacy supervised-fine-tuning JSONL format:
+
+```bash
+bash run/07_export_training_data.sh gsm8k
+```
+
+Default output:
+
+```text
+outputs/pipeline/<dataset>/train.jsonl
+```
+
+Each line contains exactly:
+
+```json
+{"instruction":"...","input":"question","output":"steps... The answer is $\\boxed{XXX}$."}
+```
+
+`output` is built by joining the validated `steps` and appending the final answer with the strict template `The answer is $\\boxed{XXX}$.`.
