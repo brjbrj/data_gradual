@@ -1,4 +1,4 @@
-﻿# data_gradual_new
+# data_gradual_new
 
 这是一个独立的渐进式数学数据合成项目。项目保留了原始的 mastery 计算、合成数量分配和相对难度分配逻辑，并在当前目录中实现了后续的计划构建、题目生成、盲解验证、定向修复和训练数据导出流程。
 
@@ -214,6 +214,27 @@ QC_ENABLE_THINKING=0
 QC_FORCE_JSON=0
 QC_ROUND_RETRY_DELAY=1
 ```
+
+训练质量控制参数：
+
+```bash
+PLAN_USE_FULL_SCENE_DOMAINS=0
+QC_MAX_QUESTION_CHARS=700
+QC_MAX_SOLUTION_CHARS=900
+QC_MAX_STEP_COUNT=10
+QC_TEMPLATE_CALCULATE_MAX_STEPS=1
+QC_BLOCK_TRAINING_UNFRIENDLY_SCENES=1
+QC_WARN_OVERUSED_FINAL_ANSWERS=1
+```
+
+含义：
+
+- `PLAN_USE_FULL_SCENE_DOMAINS=0` 时，plan 阶段默认使用更接近 GSM8K 的日常场景池，如学校、购物、家务、运动、食物、金钱、时间、距离和社区活动。
+- `PLAN_USE_FULL_SCENE_DOMAINS=1` 时，恢复完整场景池，允许仓储、实验室、软件、太阳能、水站、机场等技术/工程化场景。
+- `QC_MAX_QUESTION_CHARS`、`QC_MAX_SOLUTION_CHARS`、`QC_MAX_STEP_COUNT` 用于拦截过长、过啰嗦、步骤过多的样本。
+- `QC_TEMPLATE_CALCULATE_MAX_STEPS` 用于拦截大量步骤都以 `Calculate...` 开头的模板化解答。
+- `QC_BLOCK_TRAINING_UNFRIENDLY_SCENES=1` 时，校验预检查会拒绝明显不利于 GSM8K 风格训练的技术化场景。
+- 被拒绝的样本不会直接进入训练数据，而是进入已有的重新生成、修复或 replan 流程。
 
 ## vLLM / NCCL 配置说明
 

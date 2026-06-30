@@ -43,6 +43,18 @@ ARITHMETIC_SUFFIX_RE = re.compile(r"(?P<expression>[.\d(][\d\s.+\-*/()]*)$")
 CLAIMED_RESULT_RE = re.compile(
     r"^\s*(?P<result>[-+]?(?:\d+(?:\.\d+)?|\.\d+))"
 )
+CALCULATE_STEP_RE = re.compile(r"^\s*(?:step\s*\d+\s*[:.)-]\s*)?calculate\b", re.IGNORECASE)
+TRAINING_UNFRIENDLY_SCENE_RE = re.compile(
+    r"\b(?:"
+    r"computer\s+lab|gigabytes?|software|database|server|storage|"
+    r"solar\s+panels?|kilowatts?|reservoir|water\s+distribution|"
+    r"warehouse|pallets?|cartons?|logistics|delivery\s+center|"
+    r"construction\s+site|bricks?|laboratory|science\s+lab|"
+    r"airport|regional\s+airport|recycling\s+center|technician|engineer"
+    r")\b",
+    re.IGNORECASE,
+)
+OVERUSED_FINAL_ANSWERS = {"0", "10", "20", "30", "40", "50", "60", "100", "120"}
 
 
 def _json_message(system: str, payload: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -309,6 +321,32 @@ def precheck_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
         flags=re.IGNORECASE,
     ):
         issues.append("multiple_subquestions")
+
+    max_question_chars = _parse_int_env("QC_MAX_QUESTION_CHARS", 700)
+    max_solution_chars = _parse_int_env("QC_MAX_SOLUTION_CHARS", 900)
+    max_step_count = _parse_int_env("QC_MAX_STEP_COUNT", 10)
+    calculate_max_steps = _parse_int_env("QC_TEMPLATE_CALCULATE_MAX_STEPS", 1)
+    block_unfriendly_scene = _parse_bool_env("QC_BLOCK_TRAINING_UNFRIENDLY_SCENES", True)
+    warn_overused_answer = _parse_bool_env("QC_WARN_OVERUSED_FINAL_ANSWERS", True)
+
+    if max_question_chars > 0 and len(question) > max_question_chars:
+        issues.append("question_too_long_for_training")
+    solution_text = normalize_whitespace(" ".join(steps))
+    if max_solution_chars > 0 and len(solution_text) > max_solution_chars:
+        issues.append("solution_too_long_for_training")
+    if max_step_count > 0 and len(steps) > max_step_count:
+        issues.append("too_many_steps_for_training")
+    calculate_starts = sum(1 for step in steps if CALCULATE_STEP_RE.search(step))
+    if (
+        calculate_max_steps >= 0
+        and calculate_starts > calculate_max_steps
+        and calculate_starts / max(1, len(steps)) >= 0.4
+    ):
+        issues.append("template_calculate_steps")
+    if block_unfriendly_scene and TRAINING_UNFRIENDLY_SCENE_RE.search(question):
+        issues.append("training_unfriendly_scene")
+    if warn_overused_answer and answer in OVERUSED_FINAL_ANSWERS:
+        warnings.append("overused_final_answer")
 
     normalized_step_keys = [
         re.sub(r"\s+", "", step.lower())

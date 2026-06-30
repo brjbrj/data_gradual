@@ -137,6 +137,26 @@ Edit `config/pipeline.env`.
 | `QC_ENABLE_THINKING` | `0` | Disable Qwen thinking mode |
 | `QC_FORCE_JSON` | `0` | Optional JSON response format |
 | `QC_ROUND_RETRY_DELAY` | `1` | Delay between validation rounds |
+| `PLAN_USE_FULL_SCENE_DOMAINS` | `0` | Use the full scene pool when `1`; default `0` favors GSM8K-like everyday scenes |
+| `QC_MAX_QUESTION_CHARS` | `700` | Reject overly long questions before blind validation |
+| `QC_MAX_SOLUTION_CHARS` | `900` | Reject overly verbose generated solutions |
+| `QC_MAX_STEP_COUNT` | `10` | Reject generated solutions with too many steps |
+| `QC_TEMPLATE_CALCULATE_MAX_STEPS` | `1` | Reject formulaic outputs that start many steps with `Calculate` |
+| `QC_BLOCK_TRAINING_UNFRIENDLY_SCENES` | `1` | Reject technical warehouse/lab/software/engineering-style scenes by default |
+| `QC_WARN_OVERUSED_FINAL_ANSWERS` | `1` | Add warnings for very common final answers such as `10`, `20`, `60`, or `120` |
+
+### Training-Quality Controls
+
+The synthesis planner now defaults to a GSM8K-friendly scene pool: school,
+shopping, chores, sports, food, money, time, distance, community events, and
+other everyday contexts. Technical domains such as warehouses, computer labs,
+solar projects, water stations, airports, and recycling centers are excluded
+unless `PLAN_USE_FULL_SCENE_DOMAINS=1`.
+
+Generation prompts also ask for compact GSM8K-style problems and concise
+solutions. Validation precheck rejects candidates that are too long, too
+formulaic, or obviously training-unfriendly before spending blind-solver and
+auditor calls. Rejected candidates enter the existing regenerate/replan flow.
 
 ### Moving to another machine
 

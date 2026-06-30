@@ -4,6 +4,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -61,6 +62,26 @@ SCENE_DOMAINS = [
     {"domain": "online_course", "setting": "an online course", "roles": ["learner", "instructor", "moderator"], "objects": ["lessons", "quizzes", "modules"], "units": ["lessons", "minutes", "points"]},
 ]
 
+TRAINING_FRIENDLY_EXCLUDED_DOMAINS = {
+    "delivery_center",
+    "warehouse",
+    "workshop",
+    "construction_site",
+    "science_lab",
+    "computer_lab",
+    "solar_project",
+    "water_station",
+    "recycling_center",
+    "airport",
+    "online_course",
+}
+
+TRAINING_FRIENDLY_SCENE_DOMAINS = [
+    domain
+    for domain in SCENE_DOMAINS
+    if domain["domain"] not in TRAINING_FRIENDLY_EXCLUDED_DOMAINS
+]
+
 VARIATION_MODES = [
     "same mathematical template in a completely different scene",
     "same core operations with a different unknown quantity",
@@ -87,6 +108,19 @@ NUMBER_STRATEGIES = [
     "use rates and totals with realistic non-seed values",
     "use two groups with different quantities and a clean final answer",
 ]
+
+
+def _parse_bool_env(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _scene_domain_pool() -> List[Dict[str, Any]]:
+    if _parse_bool_env("PLAN_USE_FULL_SCENE_DOMAINS", False):
+        return SCENE_DOMAINS
+    return TRAINING_FRIENDLY_SCENE_DOMAINS or SCENE_DOMAINS
 
 
 def _stable_int(value: str) -> int:
@@ -264,13 +298,14 @@ def _build_plan_knowledge(
             1,
         )
 
-    domain_start = _stable_int(f"{seed_id}|domain") % len(SCENE_DOMAINS)
-    primary_domain = SCENE_DOMAINS[
-        (domain_start + variant_index) % len(SCENE_DOMAINS)
+    scene_domains = _scene_domain_pool()
+    domain_start = _stable_int(f"{seed_id}|domain") % len(scene_domains)
+    primary_domain = scene_domains[
+        (domain_start + variant_index) % len(scene_domains)
     ]
     alternative_domains = [
-        SCENE_DOMAINS[
-            (domain_start + variant_index + offset) % len(SCENE_DOMAINS)
+        scene_domains[
+            (domain_start + variant_index + offset) % len(scene_domains)
         ]
         for offset in (7, 13, 21)
     ]
@@ -278,7 +313,7 @@ def _build_plan_knowledge(
         (_stable_int(f"{seed_id}|variation") + variant_index) % len(VARIATION_MODES)
     ]
     narrative_style = NARRATIVE_STYLES[
-        (_stable_int(f"{seed_id}|narrative") + variant_index // len(SCENE_DOMAINS))
+        (_stable_int(f"{seed_id}|narrative") + variant_index // len(scene_domains))
         % len(NARRATIVE_STYLES)
     ]
     number_strategy = NUMBER_STRATEGIES[
@@ -402,17 +437,18 @@ def replan_failed_plan(
     current_domain = str(
         diversity.get("primary_scene", {}).get("domain") or ""
     )
-    start = _stable_int(f"{plan_id}|replan|{retry_round}") % len(SCENE_DOMAINS)
+    scene_domains = _scene_domain_pool()
+    start = _stable_int(f"{plan_id}|replan|{retry_round}") % len(scene_domains)
     selected_index = start
-    for offset in range(len(SCENE_DOMAINS)):
-        candidate_index = (start + offset) % len(SCENE_DOMAINS)
-        if SCENE_DOMAINS[candidate_index]["domain"] != current_domain:
+    for offset in range(len(scene_domains)):
+        candidate_index = (start + offset) % len(scene_domains)
+        if scene_domains[candidate_index]["domain"] != current_domain:
             selected_index = candidate_index
             break
 
-    primary_scene = SCENE_DOMAINS[selected_index]
+    primary_scene = scene_domains[selected_index]
     alternative_scenes = [
-        SCENE_DOMAINS[(selected_index + offset) % len(SCENE_DOMAINS)]
+        scene_domains[(selected_index + offset) % len(scene_domains)]
         for offset in (5, 11, 19)
     ]
     variation_mode = VARIATION_MODES[
