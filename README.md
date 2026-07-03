@@ -144,6 +144,12 @@ Edit `config/pipeline.env`.
 | `QC_TEMPLATE_CALCULATE_MAX_STEPS` | `1` | Reject formulaic outputs that start many steps with `Calculate` |
 | `QC_BLOCK_TRAINING_UNFRIENDLY_SCENES` | `1` | Reject technical warehouse/lab/software/engineering-style scenes by default |
 | `QC_WARN_OVERUSED_FINAL_ANSWERS` | `1` | Add warnings for very common final answers such as `10`, `20`, `60`, or `120` |
+| `QC_TRAINING_STYLE_HARD_FAIL` | `0` | Treat training-style issues as warnings by default, avoiding expensive repair loops |
+| `QC_SEVERE_MAX_QUESTION_CHARS` | `1200` | Still hard-fail extremely long questions |
+| `QC_SEVERE_MAX_SOLUTION_CHARS` | `1800` | Still hard-fail extremely verbose solutions |
+| `QC_SEVERE_MAX_STEP_COUNT` | `16` | Still hard-fail extremely long step lists |
+| `QC_DIFFICULTY_TOLERANCE` | `1` | Allow adjacent difficulty estimates to pass validation |
+| `QC_REQUIRE_EXACT_DIFFICULTY` | `0` | Set to `1` to require exact target difficulty matching |
 
 ### Training-Quality Controls
 
@@ -154,9 +160,10 @@ solar projects, water stations, airports, and recycling centers are excluded
 unless `PLAN_USE_FULL_SCENE_DOMAINS=1`.
 
 Generation prompts also ask for compact GSM8K-style problems and concise
-solutions. Validation precheck rejects candidates that are too long, too
-formulaic, or obviously training-unfriendly before spending blind-solver and
-auditor calls. Rejected candidates enter the existing regenerate/replan flow.
+solutions. Validation precheck records candidates that are too long, too
+formulaic, or obviously training-unfriendly as warnings by default, so
+mathematically correct samples are not forced into expensive repair loops.
+Set `QC_TRAINING_STYLE_HARD_FAIL=1` if you prefer strict filtering.
 
 ### Moving to another machine
 

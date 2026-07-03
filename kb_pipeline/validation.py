@@ -36,6 +36,13 @@ DIFFICULTY_STEP_RANGES = {
 }
 
 ALLOWED_DIFFICULTIES = set(DIFFICULTY_STEP_RANGES)
+DIFFICULTY_RANK = {
+    "Easy": 0,
+    "Slightly Easy": 1,
+    "Equal": 2,
+    "Slightly Hard": 3,
+    "Hard": 4,
+}
 NUMERIC_TOKEN_RE = re.compile(
     r"[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?(?:/\d+(?:\.\d+)?)?"
 )
@@ -55,6 +62,13 @@ TRAINING_UNFRIENDLY_SCENE_RE = re.compile(
     re.IGNORECASE,
 )
 OVERUSED_FINAL_ANSWERS = {"0", "10", "20", "30", "40", "50", "60", "100", "120"}
+TRAINING_STYLE_ISSUES = {
+    "question_too_long_for_training",
+    "solution_too_long_for_training",
+    "too_many_steps_for_training",
+    "template_calculate_steps",
+    "training_unfriendly_scene",
+}
 
 
 def _json_message(system: str, payload: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -214,6 +228,8 @@ def _repair_prompt(
                 "Every step must be concise, necessary, and mathematically correct.",
                 "The answer must be a numeric string without units, commas, or symbols.",
                 "Match the target difficulty through necessary reasoning depth.",
+                "If the previous issue was a style warning such as template_calculate_steps, keep the math simple and rewrite steps with varied natural wording instead of adding complexity.",
+                "Prefer a compact GSM8K-style everyday setting unless the current question must be kept unchanged.",
                 "Do not mention validation, repair, audits, or previous mistakes.",
                 "Return exactly one JSON object and no markdown.",
             ],
@@ -328,25 +344,41 @@ def precheck_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
     calculate_max_steps = _parse_int_env("QC_TEMPLATE_CALCULATE_MAX_STEPS", 1)
     block_unfriendly_scene = _parse_bool_env("QC_BLOCK_TRAINING_UNFRIENDLY_SCENES", True)
     warn_overused_answer = _parse_bool_env("QC_WARN_OVERUSED_FINAL_ANSWERS", True)
+    style_hard_fail = _parse_bool_env("QC_TRAINING_STYLE_HARD_FAIL", False)
+    severe_question_chars = _parse_int_env("QC_SEVERE_MAX_QUESTION_CHARS", 1200)
+    severe_solution_chars = _parse_int_env("QC_SEVERE_MAX_SOLUTION_CHARS", 1800)
+    severe_step_count = _parse_int_env("QC_SEVERE_MAX_STEP_COUNT", 16)
+
+    def add_style_issue(issue: str) -> None:
+        if style_hard_fail:
+            issues.append(issue)
+        else:
+            warnings.append(issue)
 
     if max_question_chars > 0 and len(question) > max_question_chars:
-        issues.append("question_too_long_for_training")
+        add_style_issue("question_too_long_for_training")
     solution_text = normalize_whitespace(" ".join(steps))
     if max_solution_chars > 0 and len(solution_text) > max_solution_chars:
-        issues.append("solution_too_long_for_training")
+        add_style_issue("solution_too_long_for_training")
     if max_step_count > 0 and len(steps) > max_step_count:
-        issues.append("too_many_steps_for_training")
+        add_style_issue("too_many_steps_for_training")
     calculate_starts = sum(1 for step in steps if CALCULATE_STEP_RE.search(step))
     if (
         calculate_max_steps >= 0
         and calculate_starts > calculate_max_steps
         and calculate_starts / max(1, len(steps)) >= 0.4
     ):
-        issues.append("template_calculate_steps")
+        add_style_issue("template_calculate_steps")
     if block_unfriendly_scene and TRAINING_UNFRIENDLY_SCENE_RE.search(question):
-        issues.append("training_unfriendly_scene")
+        add_style_issue("training_unfriendly_scene")
     if warn_overused_answer and answer in OVERUSED_FINAL_ANSWERS:
         warnings.append("overused_final_answer")
+    if severe_question_chars > 0 and len(question) > severe_question_chars:
+        issues.append("severely_long_question")
+    if severe_solution_chars > 0 and len(solution_text) > severe_solution_chars:
+        issues.append("severely_long_solution")
+    if severe_step_count > 0 and len(steps) > severe_step_count:
+        issues.append("severely_many_steps")
 
     normalized_step_keys = [
         re.sub(r"\s+", "", step.lower())
@@ -560,9 +592,22 @@ def decide_validation(
     blind = summarize_blind_votes(votes)
     candidate_answer = _normalize_answer(candidate.get("answer", ""))
     reasons: List[str] = []
+    warnings: List[str] = list(precheck.get("warnings", []))
+    difficulty_tolerance = max(0, _parse_int_env("QC_DIFFICULTY_TOLERANCE", 1))
+    require_exact_difficulty = _parse_bool_env("QC_REQUIRE_EXACT_DIFFICULTY", False)
 
     if not precheck.get("passed"):
-        reasons.extend(precheck.get("issues", []))
+        hard_issues = [
+            issue
+            for issue in precheck.get("issues", [])
+            if issue not in TRAINING_STYLE_ISSUES
+        ]
+        warnings.extend(
+            issue
+            for issue in precheck.get("issues", [])
+            if issue in TRAINING_STYLE_ISSUES
+        )
+        reasons.extend(hard_issues)
     if not blind["consensus"]:
         reasons.append("no_blind_consensus")
     elif not _answers_equal(blind["consensus_answer"], candidate_answer):
@@ -580,17 +625,30 @@ def decide_validation(
             ("unique_answer", "non_unique_answer"),
             ("answer_correct", "incorrect_answer"),
             ("steps_correct", "invalid_steps"),
-            ("difficulty_match", "difficulty_mismatch"),
         ):
             if not audit.get(field):
                 reasons.append(issue)
+        estimated_difficulty = str(audit.get("estimated_difficulty") or "")
+        difficulty_gap = abs(
+            DIFFICULTY_RANK.get(estimated_difficulty, DIFFICULTY_RANK.get(target_difficulty, 2))
+            - DIFFICULTY_RANK.get(target_difficulty, 2)
+        )
+        if not audit.get("difficulty_match"):
+            if require_exact_difficulty or difficulty_gap > difficulty_tolerance:
+                reasons.append("difficulty_mismatch")
+            else:
+                warnings.append("soft_difficulty_mismatch")
         if (
-            audit.get("estimated_difficulty") in ALLOWED_DIFFICULTIES
-            and audit.get("estimated_difficulty") != target_difficulty
+            estimated_difficulty in ALLOWED_DIFFICULTIES
+            and estimated_difficulty != target_difficulty
         ):
-            reasons.append("difficulty_mismatch")
+            if require_exact_difficulty or difficulty_gap > difficulty_tolerance:
+                reasons.append("difficulty_mismatch")
+            else:
+                warnings.append("estimated_adjacent_difficulty")
 
     reasons = list(dict.fromkeys(reasons))
+    warnings = list(dict.fromkeys(warnings))
     passed = not reasons
     if passed:
         action = "pass"
@@ -642,6 +700,7 @@ def decide_validation(
         "repair_action": action,
         "error_type": error_type,
         "reasons": reasons,
+        "warnings": warnings,
         "target_difficulty": target_difficulty,
         "blind_summary": blind,
     }
@@ -1203,10 +1262,22 @@ async def _run_validation_async(
                     failed_items.append((index, item, report))
 
             can_retry = infinite_rounds or round_index < max_rounds
+            reason_counter = Counter(
+                reason
+                for report in round_reports
+                for reason in report.get("reasons", [])
+            )
+            warning_counter = Counter(
+                warning
+                for report in round_reports
+                for warning in report.get("warnings", [])
+            )
             print(
                 f"[validate] round={round_index} stage=decision complete "
                 f"passed={total - len(failed_items)} failed={len(failed_items)} "
-                f"can_retry={str(can_retry).lower()}",
+                f"can_retry={str(can_retry).lower()} "
+                f"top_reasons={dict(reason_counter.most_common(8))} "
+                f"top_warnings={dict(warning_counter.most_common(8))}",
                 flush=True,
             )
             next_pending: List[Dict[str, Any]] = []
