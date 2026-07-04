@@ -324,7 +324,12 @@ outputs/pipeline/<dataset>/train.jsonl
 Each line contains exactly:
 
 ```json
-{"instruction":"...","input":"question","output":"steps... The answer is $\\boxed{XXX}$."}
+{"instruction":"...","input":"question","output":"Step 1: ...\nStep 2: ...\nThe answer is $\\boxed{XXX}$."}
 ```
 
-`output` is built by joining the validated `steps` and appending the final answer with the strict template `The answer is $\\boxed{XXX}$.`.
+`output` is built by joining the validated `steps` with one step per line and
+appending the final answer on its own line with the strict template
+`The answer is $\\boxed{XXX}$.`. If a validated step lacks an ordinal label, the
+exporter prefixes `Step N:`. Simple mechanical steps such as `Calculate X: ...`
+are lightly rewritten at export time into goal-oriented wording so the training
+target exposes the purpose of each intermediate value.

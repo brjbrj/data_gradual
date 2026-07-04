@@ -151,6 +151,11 @@ def _build_prompt(
         "- Do not copy a full sentence, name, number pattern, or story setup from the seed problem or knowledge-base examples.",
         "- The steps must be concise, ordered, necessary, and mathematically correct.",
         "- Each step must contain an actual calculation or inference, not a copied fact.",
+        "- Each step must explain the reasoning goal before or together with the calculation, so the solution reads like a logical chain rather than a list of calculator commands.",
+        "- Start every step with an explicit ordinal label such as 'Step 1:', 'Step 2:', and so on.",
+        "- Use connective reasoning words such as First, Next, Then, After that, Therefore, or Finally to show how one intermediate result is used by the next step.",
+        "- Avoid steps that only say 'Calculate ...'. Prefer wording like 'Step 1: First find the total meals needed per day, because each dog needs 2 meals: 40 * 2 = 80.'",
+        "- A good step states what is being found and why it is needed; include at most one main equation per step instead of packing several calculations into one line.",
         "- Optimize for supervised fine-tuning on GSM8K-style reasoning: natural everyday wording, compact question text, and compact solution steps.",
         "- Prefer familiar settings such as school, shopping, chores, sports, books, food, money, time, distance, simple work schedules, games, or small community events.",
         "- Avoid industrial, laboratory, software, storage, solar, reservoir, airport, warehouse, logistics-center, or other technical settings unless the seed mathematically requires them.",
@@ -160,7 +165,7 @@ def _build_prompt(
         "- Prefer clean integer arithmetic, realistic small or medium values, exact intermediate results, and a diverse final answer.",
         "- Avoid huge numbers, unnecessary decimals, answer 0 unless truly natural, and overused final answers such as 10, 20, 30, 40, 60, or 120.",
         "- The answer must be only a numeric string, without units, currency symbols, commas, or extra words.",
-        '- Output exactly: {"question":"...","steps":["...","..."],"answer":"42"}',
+        '- Output exactly: {"question":"...","steps":["Step 1: ...","Step 2: ..."],"answer":"42"}',
     ]
     if retry_reason:
         user_lines.extend(

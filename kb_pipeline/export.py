@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -14,6 +15,9 @@ TRAINING_INSTRUCTION = (
     "without units, giving only the numerical value like "
     "'The answer is $\\boxed{100}$.'"
 )
+STEP_LABEL_RE = re.compile(r"^\s*(?:step\s*)?\d+\s*[:.)-]\s*", re.IGNORECASE)
+CALCULATE_PREFIX_RE = re.compile(r"^\s*calculate\s+(.+?):\s*(.+)$", re.IGNORECASE)
+STEP_CONNECTORS = ["First", "Next", "Then", "After that", "Finally"]
 
 
 def _normalize_text(value: Any) -> str:
@@ -50,6 +54,53 @@ def _normalize_steps(value: Any) -> List[str]:
     ]
 
 
+def _lower_first(text: str) -> str:
+    if not text:
+        return text
+    return text[:1].lower() + text[1:]
+
+
+def _connector(index: int, total: int) -> str:
+    if total > 1 and index == total:
+        return "Finally"
+    if index <= len(STEP_CONNECTORS):
+        return STEP_CONNECTORS[index - 1]
+    return "Then"
+
+
+def _step_purpose(index: int, total: int) -> str:
+    if total > 1 and index == total:
+        return "this gives the requested final quantity"
+    if index == 1:
+        return "this gives the first intermediate value needed for the solution"
+    return "this intermediate value is needed for the next part of the solution"
+
+
+def _make_step_explanatory(text: str, index: int, total: int) -> str:
+    content = STEP_LABEL_RE.sub("", text, count=1).strip()
+    match = CALCULATE_PREFIX_RE.match(content)
+    if match is None:
+        return content
+    goal = _lower_first(match.group(1).strip())
+    calculation = match.group(2).strip()
+    return (
+        f"{_connector(index, total)}, find {goal}, because "
+        f"{_step_purpose(index, total)}: {calculation}"
+    )
+
+
+def _format_steps_for_training(steps: Sequence[str]) -> List[str]:
+    formatted: List[str] = []
+    total = len([step for step in steps if _normalize_text(step)])
+    for index, step in enumerate(steps, start=1):
+        text = _normalize_text(step)
+        if not text:
+            continue
+        content = _make_step_explanatory(text, index, total)
+        formatted.append(f"Step {index}: {content}")
+    return formatted
+
+
 def _solution_text(record: Dict[str, Any], answer: str) -> str:
     steps = _normalize_steps(
         record.get("steps")
@@ -57,7 +108,7 @@ def _solution_text(record: Dict[str, Any], answer: str) -> str:
         or record.get("solution")
     )
     if steps:
-        body = "\n".join(steps)
+        body = "\n".join(_format_steps_for_training(steps))
     else:
         body = _normalize_text(record.get("solution", ""))
     final = f"The answer is $\\boxed{{{answer}}}$."
@@ -66,7 +117,7 @@ def _solution_text(record: Dict[str, Any], answer: str) -> str:
     stripped = body.rstrip()
     if stripped.endswith(final):
         return stripped
-    return f"{stripped} {final}"
+    return f"{stripped}\n{final}"
 
 
 def build_training_records(quality_records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:

@@ -226,6 +226,10 @@ def _repair_prompt(
             "rules": [
                 "The result must have exactly one numeric answer.",
                 "Every step must be concise, necessary, and mathematically correct.",
+                "Every step should explain the reasoning goal and how it uses previous information, not merely name a calculation.",
+                "Start every step with an ordinal label such as 'Step 1:', 'Step 2:', and so on.",
+                "Use connective wording such as First, Next, Then, After that, Therefore, or Finally to make the reasoning chain explicit.",
+                "Prefer one main inference or equation per step; split packed semicolon calculations into separate steps.",
                 "The answer must be a numeric string without units, commas, or symbols.",
                 "Match the target difficulty through necessary reasoning depth.",
                 "If the previous issue was a style warning such as template_calculate_steps, keep the math simple and rewrite steps with varied natural wording instead of adding complexity.",

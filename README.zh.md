@@ -375,10 +375,11 @@ outputs/pipeline/<dataset>/train.jsonl
 每一行严格包含：
 
 ```json
-{"instruction":"...","input":"题目","output":"步骤拼接... The answer is $\\boxed{XXX}$."}
+{"instruction":"...","input":"题目","output":"Step 1: ...\nStep 2: ...\nThe answer is $\\boxed{XXX}$."}
 ```
 
-其中 `output` 会拼接 validated 记录中的 `steps`，并在末尾按固定格式追加最终答案：`The answer is $\\boxed{XXX}$.`。
+其中 `output` 会将 validated 记录中的 `steps` 按“一步一行”拼接，并把最终答案单独放在最后一行：`The answer is $\\boxed{XXX}$.`。
+如果某个步骤没有编号，导出器会自动补充 `Step N:`。对于 `Calculate X: ...` 这类机械步骤，导出器会做轻量改写，补充“本步要得到什么中间量、为什么需要它”，让训练目标更像连续推理链条。
 
 详见：
 
