@@ -90,11 +90,11 @@ def _make_step_explanatory(text: str, index: int, total: int) -> str:
         )
     if total > 1 and index == total:
         return (
-            f"{_connector(index, total)}, use the relevant earlier information to find {goal}; "
+            f"{_connector(index, total)}, combine the relevant given information or earlier quantities to find {goal}; "
             f"this answers the question directly: {calculation}"
         )
     return (
-        f"{_connector(index, total)}, use the relevant given information or earlier result to find {goal}; "
+        f"{_connector(index, total)}, use the relevant given information or any needed earlier quantity to find {goal}; "
         f"{_step_purpose(index, total)}: {calculation}"
     )
 
