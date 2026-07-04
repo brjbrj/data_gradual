@@ -83,8 +83,18 @@ def _make_step_explanatory(text: str, index: int, total: int) -> str:
         return content
     goal = _lower_first(match.group(1).strip())
     calculation = match.group(2).strip()
+    if index == 1:
+        return (
+            f"{_connector(index, total)}, use the given information to find {goal}; "
+            f"this gives the first quantity needed for the rest of the solution: {calculation}"
+        )
+    if total > 1 and index == total:
+        return (
+            f"{_connector(index, total)}, use the relevant earlier information to find {goal}; "
+            f"this answers the question directly: {calculation}"
+        )
     return (
-        f"{_connector(index, total)}, find {goal}, because "
+        f"{_connector(index, total)}, use the relevant given information or earlier result to find {goal}; "
         f"{_step_purpose(index, total)}: {calculation}"
     )
 
