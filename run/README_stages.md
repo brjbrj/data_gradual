@@ -67,13 +67,15 @@ Stage behavior:
 | `04_build_synthesis_plan.sh` | Skips if plan and summary already exist. |
 | `05_generate_questions.sh` | Resumes from existing `generated.jsonl`; skips successful `plan_id`s; saves every `GEN_CHECKPOINT_EVERY` completions. |
 | `06_validate_generated.sh` | Saves canonical validation files after each validation round; skips if validated outputs already exist. |
-| `07_export_training_data.sh` | Skips if train output and summary already exist. |
+| `07_refine_solution_steps.sh` | Resumes from `refined.jsonl`; skips already refined records; clears and rewrites `refine.failed.jsonl` each round. |
+| `08_export_training_data.sh` | Skips if train output and summary already exist. |
 
 Responsibility split:
 
 - `04_build_synthesis_plan.sh` is the diversity/similarity-control stage. It chooses knowledge focus, scene, problem pattern, target difficulty, and number strategy.
 - `05_generate_questions.sh` only follows the plan and emits parseable `question`, `steps`, and numeric `answer`; it does not perform global similarity filtering.
 - `06_validate_generated.sh` performs correctness, solvability, uniqueness, difficulty, repair, regeneration, and replan after repeated validation failures.
+- `07_refine_solution_steps.sh` rewrites only validated `steps` into dependency-aware training targets. It must not change question, answer, IDs, difficulty, or the validated solution path.
 
 Useful checkpoint knobs:
 
@@ -129,10 +131,16 @@ bash run/05_generate_questions.sh gsm8k
 bash run/06_validate_generated.sh gsm8k
 ```
 
-7. Export training data, no vLLM required:
+7. Refine solution steps, requires `REFINE_MODEL` or `REPAIR_MODEL` already served:
 
 ```bash
-bash run/07_export_training_data.sh gsm8k
+bash run/07_refine_solution_steps.sh gsm8k
+```
+
+8. Export training data, no vLLM required:
+
+```bash
+bash run/08_export_training_data.sh gsm8k
 ```
 
 ## Optional Managed Mode

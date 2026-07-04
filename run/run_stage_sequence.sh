@@ -44,5 +44,8 @@ bash "${ROOT_DIR}/run/04_build_synthesis_plan.sh" "${DATASET_ARG}"
 bash "${ROOT_DIR}/run/05_generate_questions.sh" "${DATASET_ARG}"
 if [[ "${RUN_VALIDATION:-1}" != "0" ]]; then
   bash "${ROOT_DIR}/run/06_validate_generated.sh" "${DATASET_ARG}"
-  bash "${ROOT_DIR}/run/07_export_training_data.sh" "${DATASET_ARG}"
+  if [[ "${RUN_STEP_REFINEMENT:-1}" != "0" ]]; then
+    bash "${ROOT_DIR}/run/07_refine_solution_steps.sh" "${DATASET_ARG}"
+  fi
+  bash "${ROOT_DIR}/run/08_export_training_data.sh" "${DATASET_ARG}"
 fi

@@ -67,18 +67,8 @@ TRAINING_STYLE_ISSUES = {
     "solution_too_long_for_training",
     "too_many_steps_for_training",
     "template_calculate_steps",
-    "poor_step_quality",
-    "mechanical_steps",
-    "unclear_step_dependencies",
     "training_unfriendly_scene",
 }
-STEP_QUALITY_ISSUES = {
-    "poor_step_quality",
-    "mechanical_steps",
-    "unclear_step_dependencies",
-}
-
-
 def _json_message(system: str, payload: Dict[str, Any]) -> List[Dict[str, str]]:
     return [
         {"role": "system", "content": system},
@@ -127,8 +117,7 @@ def _audit_prompt(
     return _json_message(
         (
             "You are a strict mathematical problem auditor. Check correctness, "
-            "solvability, uniqueness, reasoning steps, step teaching quality, "
-            "and target difficulty. "
+            "solvability, uniqueness, reasoning steps, and target difficulty. "
             "Return only valid JSON."
         ),
         {
@@ -155,14 +144,9 @@ def _audit_prompt(
             "rules": [
                 "Do not accept an answer merely because it matches the candidate answer.",
                 "Check each candidate step for arithmetic and logical correctness.",
-                "Also judge whether the steps are useful as training targets: they should explain the purpose of each calculation and the dependency behind it.",
-                "A step can depend on a problem condition, one previous result, or several independently computed quantities; it should not falsely imply a dependency that is not there.",
-                "Mark step_quality_ok=false if the answer is correct but the steps are mostly mechanical calculation labels, packed semicolon computations, or do not explain why formulas are used.",
-                "Good steps resemble GSM8K-style direct reasoning with concise connectors such as From the problem, Since, So, Therefore, or Combining these quantities.",
-                "Do not require verbose prose or trial-and-error; concise direct reasoning is enough.",
                 "A question with missing information, multiple valid answers, or contradictory conditions fails.",
                 "Difficulty must be judged from necessary reasoning, not from verbose wording.",
-                "Use repair_solution when the question and answer are valid but steps are arithmetically wrong, incomplete, too mechanical, or poor as training targets.",
+                "Use repair_solution when the question is valid and should remain unchanged.",
                 "Use repair_question for a localized ambiguity, missing condition, or difficulty mismatch.",
                 "Use regenerate_question when the mathematical structure is seriously invalid or cannot be safely repaired.",
             ],
@@ -172,12 +156,11 @@ def _audit_prompt(
                 "unique_answer": "boolean",
                 "answer_correct": "boolean",
                 "steps_correct": "boolean",
-                "step_quality_ok": "boolean",
                 "difficulty_match": "boolean",
                 "estimated_difficulty": "Easy|Slightly Easy|Equal|Slightly Hard|Hard",
                 "estimated_step_count": "integer",
                 "first_error_step": "integer, -1 if none",
-                "error_type": "none|arithmetic_error|reasoning_error|answer_mismatch|missing_condition|ambiguous_question|unsolvable|multiple_answers|difficulty_mismatch|invalid_format|poor_step_quality",
+                "error_type": "none|arithmetic_error|reasoning_error|answer_mismatch|missing_condition|ambiguous_question|unsolvable|multiple_answers|difficulty_mismatch|invalid_format",
                 "repair_action": "pass|repair_solution|repair_question|regenerate_question",
                 "correct_answer": "numeric string or empty",
                 "short_reason": "short string",
@@ -228,7 +211,6 @@ def _repair_prompt(
                 "error_type": report.get("error_type"),
                 "reasons": report.get("reasons", []),
                 "short_reason": audit.get("short_reason", ""),
-                "step_quality_ok": audit.get("step_quality_ok", True),
                 "correct_answer": audit.get("correct_answer", ""),
                 "first_error_step": audit.get("first_error_step", -1),
                 "blind_consensus_answer": (
@@ -523,7 +505,6 @@ def _parse_audit(raw: str) -> Tuple[Optional[Dict[str, Any]], str]:
         "unique_answer": _coerce_bool(payload.get("unique_answer", False)),
         "answer_correct": _coerce_bool(payload.get("answer_correct", False)),
         "steps_correct": _coerce_bool(payload.get("steps_correct", False)),
-        "step_quality_ok": _coerce_bool(payload.get("step_quality_ok", True)),
         "difficulty_match": _coerce_bool(payload.get("difficulty_match", False)),
         "estimated_difficulty": estimated_difficulty,
         "estimated_step_count": estimated_step_count,
@@ -650,7 +631,6 @@ def decide_validation(
             ("unique_answer", "non_unique_answer"),
             ("answer_correct", "incorrect_answer"),
             ("steps_correct", "invalid_steps"),
-            ("step_quality_ok", "poor_step_quality"),
         ):
             if not audit.get(field):
                 reasons.append(issue)
@@ -709,8 +689,6 @@ def decide_validation(
             )
         ):
             error_type = "invalid_format"
-        elif any(reason in reasons for reason in STEP_QUALITY_ISSUES):
-            error_type = "poor_step_quality"
         else:
             audit_error = (
                 str(audit.get("error_type") or "")

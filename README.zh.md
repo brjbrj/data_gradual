@@ -18,7 +18,9 @@
 10. 验证模型对题目进行独立盲解，必要时追加 tie-break vote。
 11. 审计候选答案、步骤、可解性、唯一性和相对难度。
 12. 根据错误类型定向修复，并进入下一轮盲解和审计。
-13. 输出通过验证的简洁数据，并可导出训练格式 JSONL。
+13. 输出通过验证的简洁数据。
+14. 可选地只改写 `steps`，把正确但机械的步骤改成更适合训练的依赖关系推理链。
+15. 导出训练格式 JSONL。
 
 ## 推荐运行方式：分步执行
 
@@ -40,7 +42,8 @@ bash run/03_score_seed.sh gsm8k
 bash run/04_build_synthesis_plan.sh gsm8k
 bash run/05_generate_questions.sh gsm8k
 bash run/06_validate_generated.sh gsm8k
-bash run/07_export_training_data.sh gsm8k
+bash run/07_refine_solution_steps.sh gsm8k
+bash run/08_export_training_data.sh gsm8k
 ```
 
 ### 每阶段模型要求和主要输出
@@ -53,7 +56,8 @@ bash run/07_export_training_data.sh gsm8k
 | `04_build_synthesis_plan.sh` | 不需要 vLLM | `outputs/planning/<dataset>/synthesis_plan.jsonl` |
 | `05_generate_questions.sh` | 需要外部服务当前提供 `GEN_MODEL` | `outputs/pipeline/<dataset>/generated.jsonl` |
 | `06_validate_generated.sh` | 需要外部服务当前提供 `QC_MODEL` | `outputs/pipeline/<dataset>/validated.jsonl` |
-| `07_export_training_data.sh` | 不需要 vLLM | `outputs/pipeline/<dataset>/train.jsonl` |
+| `07_refine_solution_steps.sh` | 需要外部服务当前提供 `REFINE_MODEL`/`REPAIR_MODEL` | `outputs/pipeline/<dataset>/refined.jsonl` |
+| `08_export_training_data.sh` | 不需要 vLLM | `outputs/pipeline/<dataset>/train.jsonl` |
 
 例如：如果第 2 阶段使用 Llama，第 3、5、6 阶段使用 Qwen，那么你需要在进入相应阶段前，手动启动或切换外部 vLLM 服务到对应模型。
 
@@ -105,7 +109,8 @@ STAGE_FORCE=1 bash run/05_generate_questions.sh gsm8k
 | `04_build_synthesis_plan.sh` | 如果 plan 和 summary 已存在，则跳过。 |
 | `05_generate_questions.sh` | 从 `generated.jsonl` 恢复；跳过已经成功的 `plan_id`；每 `GEN_CHECKPOINT_EVERY` 条完成项保存一次。 |
 | `06_validate_generated.sh` | 每轮验证后保存 canonical 文件和 `validation.rounds`；如果 validated 输出已存在，则跳过。 |
-| `07_export_training_data.sh` | 如果 train 输出和 summary 已存在，则跳过。 |
+| `07_refine_solution_steps.sh` | 从 `refined.jsonl` 恢复；跳过已经改写成功的记录；每轮会清空并重写 `refine.failed.jsonl`。 |
+| `08_export_training_data.sh` | 如果 train 输出和 summary 已存在，则跳过。 |
 
 常用恢复参数：
 
@@ -231,6 +236,11 @@ QC_SEVERE_MAX_SOLUTION_CHARS=1800
 QC_SEVERE_MAX_STEP_COUNT=16
 QC_DIFFICULTY_TOLERANCE=1
 QC_REQUIRE_EXACT_DIFFICULTY=0
+RUN_STEP_REFINEMENT=1
+REFINE_CONCURRENCY=128
+REFINE_MAX_ROUNDS=3
+REFINE_MAX_TOKENS=900
+REFINE_CHECKPOINT_EVERY=50
 ```
 
 含义：
@@ -244,6 +254,8 @@ QC_REQUIRE_EXACT_DIFFICULTY=0
 - `QC_SEVERE_MAX_QUESTION_CHARS`、`QC_SEVERE_MAX_SOLUTION_CHARS`、`QC_SEVERE_MAX_STEP_COUNT` 仍会拦截极端冗长样本，避免完全失控的输出进入训练集。
 - `QC_DIFFICULTY_TOLERANCE=1` 表示允许相邻难度档位通过，避免审计模型对难度边界判断过严导致反复修复。
 - `QC_REQUIRE_EXACT_DIFFICULTY=1` 时才恢复严格难度匹配。
+- `RUN_STEP_REFINEMENT=1` 时，全流程会在验证后运行步骤改写阶段。
+- `REFINE_*` 参数控制步骤改写阶段的并发、最大轮数、token 和 checkpoint。
 - 被拒绝的样本不会直接进入训练数据，而是进入已有的重新生成、修复或 replan 流程。
 
 ## vLLM / NCCL 配置说明
@@ -306,6 +318,7 @@ outputs/planning/<dataset>/synthesis_plan.jsonl
 - `04_build_synthesis_plan.sh` 负责多样性和相似性预防，包括知识点选择、场景构建、问题模式、难度预设、数值策略和生成数量。
 - `05_generate_questions.sh` 只负责根据 plan 生成题目、步骤和数值答案，并做轻量结构检查：JSON 是否可解析、字段是否齐全、答案是否为数值、题面是否体现 plan 的场景或关键词。不再做全局相似度扫描。
 - `06_validate_generated.sh` 负责后置校验，包括数学正确性、可解性、唯一答案、难度匹配、多轮修复、重新生成；多次失败后再回退到 replan，重新调整 plan 后继续生成。
+- `07_refine_solution_steps.sh` 只负责在验证通过的基础上改写 `steps`，不允许修改题目、答案、难度、ID 或数学解法路径。
 - generate 阶段的失败队列只处理格式错误、字段缺失、未按 plan 输出等问题；相似性控制应在 plan/replan 阶段完成。
 
 ## 生成输出
@@ -358,13 +371,28 @@ validation.rounds/
 
 ## 更多阶段说明
 
+## 步骤改写输出
+
+步骤改写阶段输入 `validated.jsonl`，输出：
+
+```text
+outputs/pipeline/<dataset>/refined.jsonl
+outputs/pipeline/<dataset>/refine.failed.jsonl
+outputs/pipeline/<dataset>/refine.raw.jsonl
+outputs/pipeline/<dataset>/refine.summary.json
+```
+
+该阶段只替换 `steps` 字段，其余字段原样保留。若手动中断，重新运行会从 `refined.jsonl` 继续。
+
 ## 训练数据导出
 
-最后阶段会将质检通过的 `validated.jsonl` 转换为旧版监督训练 JSONL 格式：
+最后阶段会优先将 `refined.jsonl` 转换为旧版监督训练 JSONL 格式；如果没有 `refined.jsonl`，则回退到 `validated.jsonl`：
 
 ```bash
-bash run/07_export_training_data.sh gsm8k
+bash run/08_export_training_data.sh gsm8k
 ```
+
+`run/07_export_training_data.sh` 仍保留为兼容 wrapper，会转发到 `08_export_training_data.sh`。
 
 默认输出位置：
 

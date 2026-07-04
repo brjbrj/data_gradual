@@ -17,7 +17,8 @@ Chinese documentation: [README.zh.md](./README.zh.md)
 9. Audit correctness, solvability, uniqueness, steps, and relative difficulty.
 10. Apply targeted repair and revalidate in the next batch round.
 11. Export passed records to `validated.jsonl`.
-12. Optionally export validated records to training-format JSONL.
+12. Optionally refine only the validated `steps` into dependency-aware training targets.
+13. Export refined or validated records to training-format JSONL.
 
 For the recommended restart-friendly workflow, use the numbered stage scripts
 instead of the monolithic pipeline. See [run/README_stages.md](./run/README_stages.md)
@@ -46,7 +47,8 @@ bash run/03_score_seed.sh gsm8k
 bash run/04_build_synthesis_plan.sh gsm8k
 bash run/05_generate_questions.sh gsm8k
 bash run/06_validate_generated.sh gsm8k
-bash run/07_export_training_data.sh gsm8k
+bash run/07_refine_solution_steps.sh gsm8k
+bash run/08_export_training_data.sh gsm8k
 ```
 
 Stage model requirements:
@@ -59,7 +61,8 @@ Stage model requirements:
 | `04_build_synthesis_plan.sh` | None | `outputs/planning/<dataset>/synthesis_plan.jsonl` |
 | `05_generate_questions.sh` | `GEN_MODEL` served | `outputs/pipeline/<dataset>/generated.jsonl` |
 | `06_validate_generated.sh` | `QC_MODEL` served | `outputs/pipeline/<dataset>/validated.jsonl` |
-| `07_export_training_data.sh` | None | `outputs/pipeline/<dataset>/train.jsonl` |
+| `07_refine_solution_steps.sh` | `REFINE_MODEL`/`REPAIR_MODEL` served | `outputs/pipeline/<dataset>/refined.jsonl` |
+| `08_export_training_data.sh` | None | `outputs/pipeline/<dataset>/train.jsonl` |
 
 For example, if stage 2 uses Llama and stages 3/5/6 use Qwen, start or switch
 the external vLLM server before each model-dependent stage.
@@ -69,6 +72,7 @@ the external vLLM server before each model-dependent stage.
 - `04_build_synthesis_plan.sh` owns diversity and similarity prevention. It selects the knowledge focus, scene, variation mode, number strategy, problem pattern, target difficulty, and synthesis count.
 - `05_generate_questions.sh` only realizes each plan into `question`, `steps`, and numeric `answer`. Its checks are limited to JSON/field parsing and lightweight plan alignment, such as whether the generated question reflects the assigned scene or inspiration keywords.
 - `06_validate_generated.sh` owns mathematical correctness, solvability, uniqueness, exact relative difficulty, repair, regeneration, and eventual replan after repeated failures.
+- `07_refine_solution_steps.sh` runs after validation and changes only `steps`; it keeps `question`, `answer`, `difficulty`, IDs, and the validated solution path unchanged.
 - Generate-stage failures caused by invalid JSON, missing fields, or plan mismatch stay in the generation failed queue and retry the same plan. Validation-stage stubborn failures can regenerate from a repaired plan through `replan_failed_plan`.
 
 ### Resume And Rerun
@@ -91,7 +95,8 @@ Recovery behavior:
 | `04_build_synthesis_plan.sh` | Skips if plan and summary already exist. |
 | `05_generate_questions.sh` | Resumes from `generated.jsonl`; skips successful `plan_id`s; periodically checkpoints. |
 | `06_validate_generated.sh` | Saves canonical files after each validation round; skips if validated output exists. |
-| `07_export_training_data.sh` | Skips if train output and summary already exist. |
+| `07_refine_solution_steps.sh` | Resumes from `refined.jsonl`; skips already refined records; clears `refine.failed.jsonl` each round. |
+| `08_export_training_data.sh` | Skips if train output and summary already exist. |
 
 Force a stage to rebuild from scratch:
 
@@ -150,6 +155,11 @@ Edit `config/pipeline.env`.
 | `QC_SEVERE_MAX_STEP_COUNT` | `16` | Still hard-fail extremely long step lists |
 | `QC_DIFFICULTY_TOLERANCE` | `1` | Allow adjacent difficulty estimates to pass validation |
 | `QC_REQUIRE_EXACT_DIFFICULTY` | `0` | Set to `1` to require exact target difficulty matching |
+| `RUN_STEP_REFINEMENT` | `1` | Enable the step-refinement stage in the full pipeline |
+| `REFINE_CONCURRENCY` | `128` | Concurrent step-refinement requests |
+| `REFINE_MAX_ROUNDS` | `3` | Retry rounds for failed step refinements |
+| `REFINE_MAX_TOKENS` | `900` | Maximum output tokens for step refinement |
+| `REFINE_CHECKPOINT_EVERY` | `50` | Save refined output every N completed records |
 
 ### Training-Quality Controls
 
@@ -307,13 +317,34 @@ validation.rounds/
 
 Legacy `quality.py` and `noise.py` are retained for historical comparison. The new flow uses `kb_pipeline/validation.py`.
 
-## Training Export
+## Step Refinement And Training Export
 
-The final stage converts validated records into the legacy supervised-fine-tuning JSONL format:
+After validation, the optional step-refinement stage rewrites only the `steps`
+field. It preserves all other fields and keeps the validated answer and solution
+path unchanged:
 
 ```bash
-bash run/07_export_training_data.sh gsm8k
+bash run/07_refine_solution_steps.sh gsm8k
 ```
+
+Outputs:
+
+```text
+outputs/pipeline/<dataset>/refined.jsonl
+outputs/pipeline/<dataset>/refine.failed.jsonl
+outputs/pipeline/<dataset>/refine.raw.jsonl
+outputs/pipeline/<dataset>/refine.summary.json
+```
+
+The final export stage converts `refined.jsonl` into the legacy
+supervised-fine-tuning JSONL format. If `refined.jsonl` does not exist, it falls
+back to `validated.jsonl`:
+
+```bash
+bash run/08_export_training_data.sh gsm8k
+```
+
+`run/07_export_training_data.sh` remains as a compatibility wrapper for export.
 
 Default output:
 
