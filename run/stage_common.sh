@@ -142,7 +142,11 @@ request = urllib.request.Request(
     method="GET",
 )
 try:
-    with urllib.request.urlopen(request, timeout=5) as response:
+    # vLLM readiness probes are always local service checks. Some clusters set
+    # HTTP(S)_PROXY globally; urllib would then send 127.0.0.1 traffic to Squid
+    # and return a long HTML 503 page instead of probing the local API server.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=5) as response:
         payload = json.loads(response.read().decode("utf-8"))
 except urllib.error.HTTPError as exc:
     try:
