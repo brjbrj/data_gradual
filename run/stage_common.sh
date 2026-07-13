@@ -232,6 +232,10 @@ stage_ensure_vllm() {
   if [[ "${mode}" == "managed" ]]; then
     local pid_file="${VLLM_PID_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.pid}"
     local log_file="${VLLM_LOG_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.log}"
+    if stage_check_served_model "${expected}"; then
+      stage_log "reusing managed vLLM for ${label}: ${expected}"
+      return 0
+    fi
     stage_log "starting managed vLLM for ${label}: ${expected}"
     bash "${STAGE_ROOT_DIR}/run/start_vllm.sh" \
       --background \
