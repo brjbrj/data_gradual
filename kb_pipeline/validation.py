@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+"""Mathematical validation, repair, and backtracking for generated questions.
+
+This stage checks whether generated questions are solvable, have a unique
+numeric answer, and have mathematically correct candidate steps. It may repair
+solutions/questions or trigger regeneration/replan. Training-style step
+polishing is intentionally handled later by ``kb_pipeline.step_refine``.
+"""
+
 import argparse
 import ast
 import asyncio
@@ -69,7 +77,10 @@ TRAINING_STYLE_ISSUES = {
     "template_calculate_steps",
     "training_unfriendly_scene",
 }
+
+
 def _json_message(system: str, payload: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Build a compact two-message JSON-oriented chat request."""
     return [
         {"role": "system", "content": system},
         {
@@ -80,6 +91,7 @@ def _json_message(system: str, payload: Dict[str, Any]) -> List[Dict[str, str]]:
 
 
 def _blind_solve_prompt(question: str, vote_index: int) -> List[Dict[str, str]]:
+    """Prompt a verifier to solve the question without seeing candidate output."""
     return _json_message(
         (
             "You independently solve one math problem. You are a blind verifier: "
@@ -113,6 +125,7 @@ def _audit_prompt(
     target_difficulty: str,
     seed_reference: Dict[str, Any],
 ) -> List[Dict[str, str]]:
+    """Prompt the auditor to compare candidate output against blind consensus."""
     low, high = DIFFICULTY_STEP_RANGES.get(target_difficulty, (2, 4))
     return _json_message(
         (
@@ -177,6 +190,7 @@ def _repair_prompt(
     target_difficulty: str,
     seed_reference: Dict[str, Any],
 ) -> List[Dict[str, str]]:
+    """Prompt repair/regeneration according to the decision action."""
     audit = report.get("audit") or {}
     if action == "repair_solution":
         task = (
@@ -322,6 +336,12 @@ def _simple_equations(step: str) -> List[Tuple[str, float]]:
 
 
 def precheck_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """Run deterministic checks before spending model calls on validation.
+
+    Hard structural/math issues become ``issues``. Training friendliness items
+    default to ``warnings`` so validation remains focused on correctness unless
+    the environment explicitly requests hard style failures.
+    """
     question = normalize_whitespace(candidate.get("question", ""))
     steps = _normalize_steps(candidate.get("steps", []))
     answer = _normalize_answer(candidate.get("answer", ""))
@@ -595,6 +615,7 @@ def decide_validation(
     audit: Optional[Dict[str, Any]],
     target_difficulty: str,
 ) -> Dict[str, Any]:
+    """Combine precheck, blind votes, and audit into one repair decision."""
     blind = summarize_blind_votes(votes)
     candidate_answer = _normalize_answer(candidate.get("answer", ""))
     reasons: List[str] = []
@@ -776,6 +797,12 @@ async def _run_validation_async(
     failed_path: Optional[Path],
     repair_history_path: Optional[Path],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Validate, repair, regenerate, and replan candidates until settled.
+
+    The loop writes checkpoints after each round so interrupted validation can
+    preserve accepted records and make failures inspectable. If repeated repair
+    attempts stall, the active plan is refreshed before generating again.
+    """
     try:
         from openai import AsyncOpenAI
     except ImportError as exc:
@@ -1530,6 +1557,7 @@ def validate_generated_questions(
     failed_path: Optional[Path] = None,
     repair_history_path: Optional[Path] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Synchronous wrapper used by the validation stage script."""
     return asyncio.run(
         _run_validation_async(
             candidates,
@@ -1590,6 +1618,7 @@ def validate_generated_questions(
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """CLI entrypoint for ``run/06_validate_generated.sh``."""
     parser = argparse.ArgumentParser(
         description="Blind-solve, audit, repair, and revalidate generated math problems."
     )

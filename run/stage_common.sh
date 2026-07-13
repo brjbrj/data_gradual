@@ -51,6 +51,9 @@ stage_init() {
   VALIDATION_REPORTS_PATH="${VALIDATION_REPORTS_PATH:-${PIPELINE_DIR}/validation_reports.jsonl}"
   VALIDATION_FAILED_PATH="${VALIDATION_FAILED_PATH:-${PIPELINE_DIR}/validation.failed.jsonl}"
   REPAIR_HISTORY_PATH="${REPAIR_HISTORY_PATH:-${PIPELINE_DIR}/repair_history.jsonl}"
+  # Step refinement sits between validation and SFT export. It is separate from
+  # validation so correctness checks stay math-focused while final training data
+  # can still receive clearer, dependency-aware reasoning steps.
   REFINED_OUTPUT_PATH="${REFINED_OUTPUT_PATH:-${PIPELINE_DIR}/refined.jsonl}"
   REFINE_RAW_OUTPUT_PATH="${REFINE_RAW_OUTPUT_PATH:-${PIPELINE_DIR}/refine.raw.jsonl}"
   REFINE_FAILED_PATH="${REFINE_FAILED_PATH:-${PIPELINE_DIR}/refine.failed.jsonl}"
@@ -226,7 +229,7 @@ stage_ensure_vllm() {
     local pid_file="${VLLM_PID_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.pid}"
     local log_file="${VLLM_LOG_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.log}"
     stage_log "starting managed vLLM for ${label}: ${expected}"
-    "${STAGE_ROOT_DIR}/run/start_vllm.sh" \
+    bash "${STAGE_ROOT_DIR}/run/start_vllm.sh" \
       --background \
       --pid-file "${pid_file}" \
       --log-file "${log_file}" \
@@ -270,6 +273,6 @@ stage_require_file() {
 
 stage_cleanup_managed_vllm() {
   if [[ -n "${STAGE_MANAGED_PID_FILE:-}" ]]; then
-    "${STAGE_ROOT_DIR}/run/stop_vllm.sh" --pid-file "${STAGE_MANAGED_PID_FILE}" >/dev/null 2>&1 || true
+    bash "${STAGE_ROOT_DIR}/run/stop_vllm.sh" --pid-file "${STAGE_MANAGED_PID_FILE}" >/dev/null 2>&1 || true
   fi
 }

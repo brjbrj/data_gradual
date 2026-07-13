@@ -21,7 +21,7 @@ if [[ "${STAGE_VLLM_MODE}" == "managed" ]]; then
   export STAGE_VLLM_STOP_ON_EXIT="${STAGE_VLLM_STOP_ON_EXIT:-0}"
   STAGE_SEQUENCE_PID_FILE="${VLLM_PID_FILE:-${OUTPUT_DIR:-${ROOT_DIR}/outputs}/runtime/vllm/vllm.pid}"
   cleanup_sequence_vllm() {
-    "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${STAGE_SEQUENCE_PID_FILE}" >/dev/null 2>&1 || true
+    bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${STAGE_SEQUENCE_PID_FILE}" >/dev/null 2>&1 || true
   }
   trap cleanup_sequence_vllm EXIT INT TERM
 fi
@@ -44,8 +44,11 @@ bash "${ROOT_DIR}/run/04_build_synthesis_plan.sh" "${DATASET_ARG}"
 bash "${ROOT_DIR}/run/05_generate_questions.sh" "${DATASET_ARG}"
 if [[ "${RUN_VALIDATION:-1}" != "0" ]]; then
   bash "${ROOT_DIR}/run/06_validate_generated.sh" "${DATASET_ARG}"
+  # Optional final wording pass: keep validated math fixed, polish only steps
+  # for training friendliness. Disable with RUN_STEP_REFINEMENT=0.
   if [[ "${RUN_STEP_REFINEMENT:-1}" != "0" ]]; then
     bash "${ROOT_DIR}/run/07_refine_solution_steps.sh" "${DATASET_ARG}"
   fi
+  # Export automatically uses refined.jsonl when present, otherwise validated.jsonl.
   bash "${ROOT_DIR}/run/08_export_training_data.sh" "${DATASET_ARG}"
 fi

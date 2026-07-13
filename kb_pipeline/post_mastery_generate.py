@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Generate synthetic math questions from post-mastery synthesis plans.
+
+This stage realizes each plan into ``question``, candidate ``steps``, and a
+numeric ``answer``. It performs JSON/field/plan-alignment checks only; strict
+math validation, repair, and final step polishing happen in later stages.
+"""
+
 import argparse
 import ast
 import asyncio
@@ -110,6 +117,12 @@ def _build_prompt(
     attempt_index: int = 0,
     retry_reason: str = "",
 ) -> List[Dict[str, str]]:
+    """Build the generation prompt for one plan attempt.
+
+    The prompt preserves the current project split: generation should follow
+    the plan and produce a valid candidate, but it should not become a heavy
+    validator or global similarity checker.
+    """
     math_knowledge = knowledge.get("math", {})
     diversity = knowledge.get("diversity", {})
     primary_scene = diversity.get("primary_scene", {})
@@ -283,6 +296,7 @@ def _normalize_answer(value: Any) -> str:
 
 
 def _parse_generated_output(raw: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Normalize one model response into the canonical generated record shape."""
     payload = _unwrap_payload(_decode_json_candidate(raw))
     if not payload:
         return None, "response is not a valid JSON object"
@@ -662,6 +676,12 @@ async def _generate_all_async(
     resume: bool,
     checkpoint_every: int,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Generate all planned questions with resumable round checkpoints.
+
+    This function intentionally performs only lightweight parsing and plan
+    alignment checks. Incorrect math, weak answers, and repair/backtracking are
+    handled by validation so generation can stay fast and plan-focused.
+    """
     try:
         from openai import AsyncOpenAI
     except ImportError as exc:
@@ -1025,6 +1045,7 @@ def generate_post_mastery_questions(
     resume: Optional[bool] = None,
     checkpoint_every: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Synchronous wrapper used by stage scripts and tests."""
     resolved_concurrency = concurrency
     if resolved_concurrency is None:
         resolved_concurrency = min(
@@ -1088,6 +1109,7 @@ def generate_post_mastery_questions(
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """CLI entrypoint for ``run/05_generate_questions.sh``."""
     parser = argparse.ArgumentParser(
         description="Generate synthetic questions from the compact post-mastery plan."
     )

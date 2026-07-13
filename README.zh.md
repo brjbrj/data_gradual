@@ -1,4 +1,4 @@
-# data_gradual_new
+﻿# data_gradual_new
 
 这是一个独立的渐进式数学数据合成项目。项目保留了原始的 mastery 计算、合成数量分配和相对难度分配逻辑，并在当前目录中实现了后续的计划构建、题目生成、盲解验证、定向修复和训练数据导出流程。
 
@@ -238,7 +238,7 @@ QC_DIFFICULTY_TOLERANCE=1
 QC_REQUIRE_EXACT_DIFFICULTY=0
 RUN_STEP_REFINEMENT=1
 REFINE_CONCURRENCY=128
-REFINE_MAX_ROUNDS=3
+REFINE_MAX_ROUNDS=-1
 REFINE_MAX_TOKENS=900
 REFINE_CHECKPOINT_EVERY=50
 ```
@@ -255,7 +255,7 @@ REFINE_CHECKPOINT_EVERY=50
 - `QC_DIFFICULTY_TOLERANCE=1` 表示允许相邻难度档位通过，避免审计模型对难度边界判断过严导致反复修复。
 - `QC_REQUIRE_EXACT_DIFFICULTY=1` 时才恢复严格难度匹配。
 - `RUN_STEP_REFINEMENT=1` 时，全流程会在验证后运行步骤改写阶段。
-- `REFINE_*` 参数控制步骤改写阶段的并发、最大轮数、token 和 checkpoint。
+- `REFINE_*` 参数控制步骤改写阶段的并发、最大轮数、token 和 checkpoint；`REFINE_MAX_ROUNDS=-1` 表示无限重试。
 - 被拒绝的样本不会直接进入训练数据，而是进入已有的重新生成、修复或 replan 流程。
 
 ## vLLM / NCCL 配置说明
@@ -380,7 +380,10 @@ outputs/pipeline/<dataset>/refined.jsonl
 outputs/pipeline/<dataset>/refine.failed.jsonl
 outputs/pipeline/<dataset>/refine.raw.jsonl
 outputs/pipeline/<dataset>/refine.summary.json
+outputs/pipeline/<dataset>/refine.rounds/
 ```
+
+`refine.rounds/` 会保存每一轮的 `input`、`success`、`raw`、`failed` 和 `summary` 文件，便于像 generate/validation 一样按轮次排查。
 
 该阶段只替换 `steps` 字段，其余字段原样保留。若手动中断，重新运行会从 `refined.jsonl` 继续。
 

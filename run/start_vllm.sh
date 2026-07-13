@@ -259,7 +259,7 @@ unset VLLM_PID_FILE VLLM_MODEL_FILE
 unset VLLM_PYTHON_FILE
 
 if [[ -f "${PID_FILE}" ]]; then
-  "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}"
+  bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}"
 elif ps -eo pid=,args= | awk '/[v]llm\.entrypoints\.openai\.api_server/ {found=1} END {exit found ? 0 : 1}'; then
   echo "[start_vllm] an unmanaged vLLM API server is already running." >&2
   echo "[start_vllm] stop it explicitly before starting another model." >&2
@@ -320,7 +320,7 @@ if is_enabled "${FOREGROUND_LOG}"; then
     local status="${1:-$?}"
     trap - INT TERM EXIT
     kill "${TAIL_PID}" >/dev/null 2>&1 || true
-    "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}" >/dev/null 2>&1 || true
+    bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}" >/dev/null 2>&1 || true
     exit "${status}"
   }
 
@@ -332,7 +332,7 @@ if is_enabled "${FOREGROUND_LOG}"; then
   STATUS=$?
   trap - INT TERM EXIT
   kill "${TAIL_PID}" >/dev/null 2>&1 || true
-  "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}" >/dev/null 2>&1 || true
+  bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}" >/dev/null 2>&1 || true
   set -e
   exit "${STATUS}"
 fi

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Stage 08 is the final SFT export. By default it prefers refined.jsonl from
+# Stage 07, then falls back to validated.jsonl so older workflows still work.
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "${ROOT_DIR}/run/stage_common.sh"
@@ -9,6 +12,8 @@ stage_init "$@"
 if [[ -n "${EXPORT_INPUT_PATH:-}" ]]; then
   EXPORT_INPUT="${EXPORT_INPUT_PATH}"
 elif [[ -s "${REFINED_OUTPUT_PATH}" ]]; then
+  # Use step-polished records when available; all non-step fields are inherited
+  # from validated records by the refinement stage.
   EXPORT_INPUT="${REFINED_OUTPUT_PATH}"
 else
   EXPORT_INPUT="${VALIDATED_OUTPUT_PATH}"

@@ -157,7 +157,7 @@ Edit `config/pipeline.env`.
 | `QC_REQUIRE_EXACT_DIFFICULTY` | `0` | Set to `1` to require exact target difficulty matching |
 | `RUN_STEP_REFINEMENT` | `1` | Enable the step-refinement stage in the full pipeline |
 | `REFINE_CONCURRENCY` | `128` | Concurrent step-refinement requests |
-| `REFINE_MAX_ROUNDS` | `3` | Retry rounds for failed step refinements |
+| `REFINE_MAX_ROUNDS` | `-1` | Retry rounds for failed step refinements; `-1` means unlimited |
 | `REFINE_MAX_TOKENS` | `900` | Maximum output tokens for step refinement |
 | `REFINE_CHECKPOINT_EVERY` | `50` | Save refined output every N completed records |
 
@@ -334,7 +334,11 @@ outputs/pipeline/<dataset>/refined.jsonl
 outputs/pipeline/<dataset>/refine.failed.jsonl
 outputs/pipeline/<dataset>/refine.raw.jsonl
 outputs/pipeline/<dataset>/refine.summary.json
+outputs/pipeline/<dataset>/refine.rounds/
 ```
+
+`refine.rounds/` stores per-round `input`, `success`, `raw`, `failed`, and
+`summary` files, mirroring the generate/validation debug style.
 
 The final export stage converts `refined.jsonl` into the legacy
 supervised-fine-tuning JSONL format. If `refined.jsonl` does not exist, it falls

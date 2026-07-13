@@ -67,7 +67,7 @@ Stage behavior:
 | `04_build_synthesis_plan.sh` | Skips if plan and summary already exist. |
 | `05_generate_questions.sh` | Resumes from existing `generated.jsonl`; skips successful `plan_id`s; saves every `GEN_CHECKPOINT_EVERY` completions. |
 | `06_validate_generated.sh` | Saves canonical validation files after each validation round; skips if validated outputs already exist. |
-| `07_refine_solution_steps.sh` | Resumes from `refined.jsonl`; skips already refined records; clears and rewrites `refine.failed.jsonl` each round. |
+| `07_refine_solution_steps.sh` | Resumes from `refined.jsonl`; skips already refined records; clears and rewrites `refine.failed.jsonl` each round; writes per-round logs under `refine.rounds/`. |
 | `08_export_training_data.sh` | Skips if train output and summary already exist. |
 
 Responsibility split:
