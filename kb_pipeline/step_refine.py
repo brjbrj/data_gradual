@@ -597,7 +597,7 @@ def refine_solution_steps(
             or os.environ.get("VLLM_MODEL")
             or "",
             base_url=base_url or os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8911/v1"),
-            api_key=api_key or os.environ.get("VLLM_API_KEY", "EMPTY"),
+            api_key=api_key or os.environ.get("VLLM_API_KEY") or "EMPTY",
             output_path=output_path,
             failed_path=failed_path,
             raw_path=raw_path,
