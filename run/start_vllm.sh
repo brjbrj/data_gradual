@@ -45,7 +45,7 @@ MODEL_NAME="${MODEL_OVERRIDE:-${VLLM_MODEL:-${OPENAI_MODEL:-/root/brjverl/models
 MODEL_NAME="$(printf '%s' "${MODEL_NAME}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
 CONDA_ENV_NAME="${VLLM_CONDA_ENV:-${DEFAULT_VLLM_CONDA_ENV:-qwen}}"
 VLLM_PYTHON_BIN="${VLLM_PYTHON:-}"
-API_KEY="${VLLM_API_KEY:-EMPTY}"
+API_KEY="${VLLM_API_KEY-EMPTY}"
 HOST="${VLLM_HOST-0.0.0.0}"
 # VLLM_PORT is also consumed internally by older vLLM releases. Prefer the
 # project-specific name while retaining the old setting as a compatibility
