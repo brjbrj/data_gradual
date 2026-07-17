@@ -602,6 +602,11 @@ def summarize_blind_votes(votes: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _needs_tiebreak(votes: Sequence[Dict[str, Any]]) -> bool:
+    # If all blind-solve requests failed, a tiebreak request has no signal to
+    # break and usually repeats the same API failure. Let the retry/replan
+    # logic handle the request error instead of spending another long timeout.
+    if not votes:
+        return False
     if len(votes) < 2:
         return True
     summary = summarize_blind_votes(votes)
@@ -1320,11 +1325,18 @@ async def _run_validation_async(
                     item: Dict[str, Any],
                     report: Dict[str, Any],
                 ) -> bool:
+                    next_retry_count = int(item.get("retry_failures") or 0) + 1
+                    # Primary path: per-item retry failures should accumulate.
+                    # Failsafe path: if a stale/older run somehow keeps a single
+                    # request-error item cycling without carrying retry_failures,
+                    # the global round still prevents endless blind-solve loops.
                     return (
                         report.get("repair_action") == "retry_validation"
                         and retry_replan_after >= 0
-                        and int(item.get("retry_failures") or 0) + 1
-                        >= max(1, retry_replan_after)
+                        and (
+                            next_retry_count >= max(1, retry_replan_after)
+                            or round_index + 1 >= max(1, retry_replan_after)
+                        )
                     )
 
                 repair_tasks = [
