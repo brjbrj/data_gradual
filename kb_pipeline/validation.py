@@ -59,6 +59,11 @@ CLAIMED_RESULT_RE = re.compile(
     r"^\s*(?P<result>[-+]?(?:\d+(?:\.\d+)?|\.\d+))"
 )
 CALCULATE_STEP_RE = re.compile(r"^\s*(?:step\s*\d+\s*[:.)-]\s*)?calculate\b", re.IGNORECASE)
+META_REASONING_STEP_RE = re.compile(
+    r"\b(?:let'?s\s+re-?read|i\s+need\s+to\s+adjust|adjust\s+the\s+numbers|"
+    r"rewrite\s+the\s+question|change\s+the\s+bonus|this\s+works)\b",
+    re.IGNORECASE,
+)
 TRAINING_UNFRIENDLY_SCENE_RE = re.compile(
     r"\b(?:"
     r"computer\s+lab|gigabytes?|software|database|server|storage|"
@@ -312,6 +317,11 @@ def _simple_equations(step: str) -> List[Tuple[str, float]]:
             match = ARITHMETIC_SUFFIX_RE.search(left)
             if match is None:
                 continue
+            prefix = left[: match.start()]
+            # Do not parse only the numeric tail of a symbolic equation such as
+            # ``x + 2x + 0 + 1 = 7`` as if it were ``0 + 1 = 7``.
+            if re.search(r"[+\-*/]\s*$", prefix):
+                continue
             expression = match.group("expression").strip()
         else:
             expression = left
@@ -397,6 +407,8 @@ def precheck_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
         add_style_issue("template_calculate_steps")
     if block_unfriendly_scene and TRAINING_UNFRIENDLY_SCENE_RE.search(question):
         add_style_issue("training_unfriendly_scene")
+    if META_REASONING_STEP_RE.search(solution_text):
+        issues.append("meta_reasoning_in_steps")
     if warn_overused_answer and answer in OVERUSED_FINAL_ANSWERS:
         warnings.append("overused_final_answer")
     if severe_question_chars > 0 and len(question) > severe_question_chars:
