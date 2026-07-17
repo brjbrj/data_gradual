@@ -858,6 +858,10 @@ async def _run_validation_async(
         "QC_REPLAN_AFTER_RETRY_ERRORS",
         3,
     )
+    arithmetic_replan_after = _parse_int_env(
+        "QC_REPLAN_AFTER_ARITHMETIC_ERRORS",
+        2,
+    )
     print(
         f"[validate] config model={model} concurrency={concurrency} "
         f"blind_votes={blind_votes} tiebreak_votes={tiebreak_votes} "
@@ -865,6 +869,8 @@ async def _run_validation_async(
         f"replan_after={'disabled' if replan_after < 0 else replan_after} "
         f"retry_replan_after="
         f"{'disabled' if retry_replan_after < 0 else retry_replan_after} "
+        f"arithmetic_replan_after="
+        f"{'disabled' if arithmetic_replan_after < 0 else arithmetic_replan_after} "
         f"timeout={timeout}s progress_every={progress_every} "
         f"progress_interval={progress_interval:g}s",
         flush=True,
@@ -1066,16 +1072,25 @@ async def _run_validation_async(
             and retry_replan_after >= 0
             and retry_failure_count >= max(1, retry_replan_after)
         )
+        force_arithmetic_replan = (
+            action == "repair_solution"
+            and report.get("error_type") == "arithmetic_error"
+            and arithmetic_replan_after >= 0
+            and quality_failure_count >= max(1, arithmetic_replan_after)
+        )
         if (
             repeated_count >= 1
             or force_stubborn_replan
             or force_retry_replan
+            or force_arithmetic_replan
         ):
             action = "regenerate_question"
         repair_plan = plan
         if action == "regenerate_question":
             if force_retry_replan:
                 replan_reason = "validation_response_failure"
+            elif force_arithmetic_replan:
+                replan_reason = "repeated_arithmetic_error"
             elif force_stubborn_replan:
                 replan_reason = "stubborn_validation"
             else:
@@ -1108,6 +1123,7 @@ async def _run_validation_async(
                     "repair_plan": repair_plan,
                     "forced_replan": force_stubborn_replan,
                     "forced_retry_replan": force_retry_replan,
+                    "forced_arithmetic_replan": force_arithmetic_replan,
                     "quality_failure_count": quality_failure_count,
                     "retry_failure_count": retry_failure_count,
                     "replan_reason": replan_reason,
@@ -1127,6 +1143,7 @@ async def _run_validation_async(
                 "repair_plan": repair_plan,
                 "forced_replan": force_stubborn_replan,
                 "forced_retry_replan": force_retry_replan,
+                "forced_arithmetic_replan": force_arithmetic_replan,
                 "quality_failure_count": quality_failure_count,
                 "retry_failure_count": retry_failure_count,
                 "replan_reason": replan_reason,
@@ -1139,6 +1156,7 @@ async def _run_validation_async(
                 "repair_plan": repair_plan,
                 "forced_replan": force_stubborn_replan,
                 "forced_retry_replan": force_retry_replan,
+                "forced_arithmetic_replan": force_arithmetic_replan,
                 "quality_failure_count": quality_failure_count,
                 "retry_failure_count": retry_failure_count,
                 "replan_reason": replan_reason,
