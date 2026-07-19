@@ -1,5 +1,6 @@
 # Local runtime configuration
 config/pipeline.env
+evaluation/eval.env
 .env
 .env.*
 !.env.example

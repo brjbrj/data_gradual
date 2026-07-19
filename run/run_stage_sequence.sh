@@ -37,6 +37,13 @@ else
   echo "[stage-sequence] external mode: start/switch vLLM before each model-dependent stage."
 fi
 
+if [[ "${RUN_DATA_PREPARE:-1}" != "0" ]]; then
+  bash "${ROOT_DIR}/run/00_prepare_data.sh" "${DATASET_ARG}"
+  PREPARED_INPUT="${PREPARED_INPUT_PATH:-${PREPARED_DIR:-${OUTPUT_DIR:-${ROOT_DIR}/outputs}/prepared/${DATASET_ARG}}/${DATASET_ARG}.prepared.jsonl}"
+  export INPUT_PATH="${PREPARED_INPUT}"
+  echo "[stage-sequence] prepared input=${INPUT_PATH}"
+fi
+
 bash "${ROOT_DIR}/run/01_build_kb.sh" "${DATASET_ARG}"
 bash "${ROOT_DIR}/run/02_answer_seed.sh" "${DATASET_ARG}"
 bash "${ROOT_DIR}/run/03_score_seed.sh" "${DATASET_ARG}"

@@ -1,0 +1,5 @@
+{
+  "categories": "Algebraic Operations, Equations and Inequalities, Functions and Analysis, Geometry and Measurement, Statistics and Probability",
+  "role_description": "You are a professional assistant for classifying math problems. Please strictly follow the requirements to classify and select the most appropriate category.",
+  "requirement": "Output only the single category name. Do not include spaces, punctuation, line breaks, explanations, reasoning, or other characters, except for spaces that are part of the category name. Output the category name and nothing else."
+}

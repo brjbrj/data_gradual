@@ -116,6 +116,7 @@ class VLLMClient:
         top_p: float = 0.9,
         max_tokens: int = 1024,
         response_format: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> str:
         payload: Dict[str, Any] = {
             "model": self.model,
@@ -126,6 +127,8 @@ class VLLMClient:
         }
         if response_format is not None:
             payload["response_format"] = response_format
+        if extra_body is not None:
+            payload.update(extra_body)
 
         last_error: Optional[BaseException] = None
         infinite_retries = self.max_retries < 0

@@ -1,4 +1,4 @@
-﻿# data_gradual_new
+# data_gradual_new
 
 这是一个独立的渐进式数学数据合成项目。项目保留了原始的 mastery 计算、合成数量分配和相对难度分配逻辑，并在当前目录中实现了后续的计划构建、题目生成、盲解验证、定向修复和训练数据导出流程。
 
@@ -6,21 +6,22 @@
 
 ## 当前完整流程
 
-1. 格式化原始数学题数据，并构建知识库 KB。
-2. 使用被测模型仅根据题目内容回答每道种子题 `N` 次。
-3. 保存被测模型输出的推理步骤和最终答案。
-4. 与标准答案做数值比对，并对被测模型的推理步骤进行评分。
-5. 根据正确率和步骤质量计算每道种子题的 mastery。
-6. 根据 mastery 为每道种子题分配合成数量和五级相对难度。
-7. 根据 KB、mastery 和多样性策略构建合成计划。
-8. 异步并发生成新题、步骤和答案。
-9. 对生成题做程序预检查。
-10. 验证模型对题目进行独立盲解，必要时追加 tie-break vote。
-11. 审计候选答案、步骤、可解性、唯一性和相对难度。
-12. 根据错误类型定向修复，并进入下一轮盲解和审计。
-13. 输出通过验证的简洁数据。
-14. 可选地只改写 `steps`，把正确但机械的步骤改成更适合训练的依赖关系推理链。
-15. 导出训练格式 JSONL。
+1. 先浏览并准备源数据。GSM8K 等原始格式会转成项目标准字段，缺失的 `question_type` 会由分类模型补齐。
+2. 根据准备好的标准数据构建知识库 KB。
+3. 使用被测模型仅根据题目内容回答每道种子题 `N` 次。
+4. 保存被测模型输出的推理步骤和最终答案。
+5. 与标准答案做数值比对，并对被测模型的推理步骤进行评分。
+6. 根据正确率和步骤质量计算每道种子题的 mastery。
+7. 根据 mastery 为每道种子题分配合成数量和五级相对难度。
+8. 根据 KB、mastery 和多样性策略构建合成计划。
+9. 异步并发生成新题、步骤和答案。
+10. 对生成题做程序预检查。
+11. 验证模型对题目进行独立盲解，必要时追加 tie-break vote。
+12. 审计候选答案、步骤、可解性、唯一性和相对难度。
+13. 根据错误类型定向修复，并进入下一轮盲解和审计。
+14. 输出通过验证的简洁数据。
+15. 可选地只改写 `steps`，把正确但机械的步骤改成更适合训练的依赖关系推理链。
+16. 导出训练格式 JSONL。
 
 ## 推荐运行方式：分步执行
 
@@ -36,6 +37,7 @@ export STAGE_VLLM_MODE=external
 ### 阶段命令
 
 ```bash
+bash run/00_prepare_data.sh gsm8k
 bash run/01_build_kb.sh gsm8k
 bash run/02_answer_seed.sh gsm8k
 bash run/03_score_seed.sh gsm8k
@@ -50,6 +52,7 @@ bash run/08_export_training_data.sh gsm8k
 
 | 阶段 | vLLM 要求 | 主要输出 |
 | --- | --- | --- |
+| `00_prepare_data.sh` | 只有缺少 `question_type` 时才需要 `CLASSIFY_MODEL` | `outputs/prepared/<dataset>/<dataset>.prepared.jsonl` |
 | `01_build_kb.sh` | 不需要 vLLM | `outputs/kb/<dataset>/records.jsonl` |
 | `02_answer_seed.sh` | 需要外部服务当前提供 `VICTIM_MODEL` | `outputs/analysis/<dataset>/victim_answers.raw.jsonl` |
 | `03_score_seed.sh` | 需要外部服务当前提供 `STEP_MODEL` | `outputs/analysis/<dataset>/mastery_records.jsonl` |
@@ -60,6 +63,33 @@ bash run/08_export_training_data.sh gsm8k
 | `08_export_training_data.sh` | 不需要 vLLM | `outputs/pipeline/<dataset>/train.jsonl` |
 
 例如：如果第 2 阶段使用 Llama，第 3、5、6 阶段使用 Qwen，那么你需要在进入相应阶段前，手动启动或切换外部 vLLM 服务到对应模型。
+
+### 单独测试前置处理
+
+如果只想测试原始数据格式化和题型分类，不运行后续 pipeline，可以直接运行：
+
+```bash
+cd /root/brjverl/data_gradual_new
+STAGE_FORCE=1 SAMPLE_LIMIT=5 \
+RAW_INPUT_PATH=/root/brjverl/datas/gsm8k_2.jsonl \
+PREPARED_INPUT_PATH=/tmp/gsm8k_2.prepared.test.jsonl \
+bash run/00_prepare_data.sh gsm8k_2
+```
+
+查看输出：
+
+```bash
+head -n 5 /tmp/gsm8k_2.prepared.test.jsonl
+```
+
+该阶段会先浏览输入数据 schema。如果记录已经包含 `task_id`、`question`、`answer`、`solution_steps` 和 `proficiency_score`，会自然跳过 format；如果所有记录都已经有非空 `question_type`，会自然跳过分类，并且不会检查或启动 vLLM。若只想测试格式化、不调用分类模型：
+
+```bash
+STAGE_FORCE=1 PREPARE_CLASSIFY=0 SAMPLE_LIMIT=5 \
+RAW_INPUT_PATH=/root/brjverl/datas/gsm8k_2.jsonl \
+PREPARED_INPUT_PATH=/tmp/gsm8k_2.formatted.test.jsonl \
+bash run/00_prepare_data.sh gsm8k_2
+```
 
 ### 外部 vLLM 检查方式
 
@@ -103,6 +133,7 @@ STAGE_FORCE=1 bash run/05_generate_questions.sh gsm8k
 
 | 阶段 | 恢复行为 |
 | --- | --- |
+| `00_prepare_data.sh` | 如果 prepared input 已存在则跳过；设置 `STAGE_FORCE=1` 可重建。 |
 | `01_build_kb.sh` | 如果 KB records 和 entities 已存在，则跳过。 |
 | `02_answer_seed.sh` | 从 `victim_answers.raw.jsonl` 恢复；每 `ANSWER_CHECKPOINT_EVERY` 条答案保存一次。 |
 | `03_score_seed.sh` | 从 `step_evaluations.jsonl.partial` 恢复；评分完成一条就追加保存。 |
@@ -162,6 +193,26 @@ STAGE_VLLM_MODE=external bash run/run_full_pipeline.sh gsm8k
 
 外部模式下，如果不同阶段使用不同模型，需要你在对应阶段前手动切换 vLLM。
 
+## 独立模型评测
+
+模型准确率评测不放入主合成流程，代码独立放在 `evaluation/` 目录下，需要手动执行。评测脚本会先对验证集做评测专用预处理，例如从 GSM8K 原始答案中提取 `#### 72` 作为标准答案；然后严格使用 `evaluation/prompt/generate.json` 让模型回答；最后输出 predictions、JSON 报告和 Markdown 报告，包含 sample accuracy 和 pass@k。
+
+日常修改评测参数时，优先编辑 `evaluation/eval.env`，例如模型路径、输入路径、输出目录、温度、top_p、并发数和每题回答次数。`evaluation/eval.example.env` 记录了可用配置项。
+设置 `EVAL_MAX_RETRIES=-1` 时，评测生成回答请求会无限重试。
+
+```bash
+cd /root/brjverl/data_gradual_new
+bash evaluation/run_model_eval.sh gsm8k_2
+```
+
+如果每题要生成多次回答，把 `EVAL_N_ANSWERS` 调大即可，报告会给出 `pass@1 ... pass@k`：
+
+```bash
+EVAL_N_ANSWERS=5 EVAL_TEMPERATURE=0.7 EVAL_TOP_P=0.95 bash evaluation/run_model_eval.sh gsm8k_2
+```
+
+前置数据处理里的分类也支持 `CLASSIFY_MAX_RETRIES=-1` 无限重试。如果模型输出不在预设类别中，分类器会带着允许类别列表要求模型重新分类。
+
 ## 主要配置文件
 
 配置文件：
@@ -190,6 +241,18 @@ STEP_MODEL=/path/to/Qwen3.6-27B/
 GEN_MODEL=/path/to/Qwen3.6-27B/
 QC_MODEL=/path/to/Qwen3.6-27B/
 REPAIR_MODEL=/path/to/Qwen3.6-27B/
+```
+
+前置处理配置示例：
+
+```bash
+RUN_DATA_PREPARE=1
+DATA_FORMAT_TEMPLATE=gsm8k
+PREPARE_CLASSIFY=1
+CLASSIFY_MODEL=/path/to/Qwen3.6-27B/
+CLASSIFY_BASE_URL=http://127.0.0.1:8911/v1
+CLASSIFY_API_KEY=EMPTY
+CLASSIFY_CONCURRENCY=16
 ```
 
 生成配置示例：

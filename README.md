@@ -6,19 +6,20 @@ Chinese documentation: [README.zh.md](./README.zh.md)
 
 ## Current flow
 
-1. Format the source dataset and build the KB.
-2. Let the victim model answer each seed question `N` times using only the question.
-3. Compare numeric answers and score victim-provided reasoning steps.
-4. Compute mastery and assign five-level relative difficulty plus synthesis count.
-5. Build a diversity-oriented synthesis plan: knowledge, scene, problem pattern, relative difficulty, and diversity are decided here.
-6. Generate question, steps, and answer asynchronously from the plan. This stage only checks parseable fields and lightweight plan alignment; it does not run global similarity filtering.
-7. Run deterministic prechecks.
-8. Produce two independent blind solutions; add a tie-break vote when needed.
-9. Audit correctness, solvability, uniqueness, steps, and relative difficulty.
-10. Apply targeted repair and revalidate in the next batch round.
-11. Export passed records to `validated.jsonl`.
-12. Optionally refine only the validated `steps` into dependency-aware training targets.
-13. Export refined or validated records to training-format JSONL.
+1. Inspect and prepare the source dataset. Raw GSM8K-style data is formatted into the project schema, and missing `question_type` values are filled by the classification model.
+2. Build the KB from the prepared records.
+3. Let the victim model answer each seed question `N` times using only the question.
+4. Compare numeric answers and score victim-provided reasoning steps.
+5. Compute mastery and assign five-level relative difficulty plus synthesis count.
+6. Build a diversity-oriented synthesis plan: knowledge, scene, problem pattern, relative difficulty, and diversity are decided here.
+7. Generate question, steps, and answer asynchronously from the plan. This stage only checks parseable fields and lightweight plan alignment; it does not run global similarity filtering.
+8. Run deterministic prechecks.
+9. Produce two independent blind solutions; add a tie-break vote when needed.
+10. Audit correctness, solvability, uniqueness, steps, and relative difficulty.
+11. Apply targeted repair and revalidate in the next batch round.
+12. Export passed records to `validated.jsonl`.
+13. Optionally refine only the validated `steps` into dependency-aware training targets.
+14. Export refined or validated records to training-format JSONL.
 
 For the recommended restart-friendly workflow, use the numbered stage scripts
 instead of the monolithic pipeline. See [run/README_stages.md](./run/README_stages.md)
@@ -41,6 +42,7 @@ start, switch, or stop vLLM unless you explicitly set `STAGE_VLLM_MODE=managed`.
 ### Stage Commands
 
 ```bash
+bash run/00_prepare_data.sh gsm8k
 bash run/01_build_kb.sh gsm8k
 bash run/02_answer_seed.sh gsm8k
 bash run/03_score_seed.sh gsm8k
@@ -55,6 +57,7 @@ Stage model requirements:
 
 | Stage | vLLM requirement | Main output |
 | --- | --- | --- |
+| `00_prepare_data.sh` | `CLASSIFY_MODEL` served only when `question_type` is missing | `outputs/prepared/<dataset>/<dataset>.prepared.jsonl` |
 | `01_build_kb.sh` | None | `outputs/kb/<dataset>/records.jsonl` |
 | `02_answer_seed.sh` | `VICTIM_MODEL` served | `outputs/analysis/<dataset>/victim_answers.raw.jsonl` |
 | `03_score_seed.sh` | `STEP_MODEL` served | `outputs/analysis/<dataset>/mastery_records.jsonl` |
@@ -66,6 +69,37 @@ Stage model requirements:
 
 For example, if stage 2 uses Llama and stages 3/5/6 use Qwen, start or switch
 the external vLLM server before each model-dependent stage.
+
+### Test Data Preparation Only
+
+Run the preparation stage directly when you want to test raw-data formatting and
+question classification without running the rest of the pipeline:
+
+```bash
+cd /root/brjverl/data_gradual_new
+STAGE_FORCE=1 SAMPLE_LIMIT=5 \
+RAW_INPUT_PATH=/root/brjverl/datas/gsm8k_2.jsonl \
+PREPARED_INPUT_PATH=/tmp/gsm8k_2.prepared.test.jsonl \
+bash run/00_prepare_data.sh gsm8k_2
+```
+
+Inspect the result:
+
+```bash
+head -n 5 /tmp/gsm8k_2.prepared.test.jsonl
+```
+
+The stage first inspects the input schema. If records already contain
+`task_id`, `question`, `answer`, `solution_steps`, and `proficiency_score`, it
+skips formatting. If all records already contain non-empty `question_type`, it
+skips classification and does not check or start vLLM. To test formatting only:
+
+```bash
+STAGE_FORCE=1 PREPARE_CLASSIFY=0 SAMPLE_LIMIT=5 \
+RAW_INPUT_PATH=/root/brjverl/datas/gsm8k_2.jsonl \
+PREPARED_INPUT_PATH=/tmp/gsm8k_2.formatted.test.jsonl \
+bash run/00_prepare_data.sh gsm8k_2
+```
 
 ### Stage Responsibilities
 
@@ -89,6 +123,7 @@ Recovery behavior:
 
 | Stage | Recovery behavior |
 | --- | --- |
+| `00_prepare_data.sh` | Skips if prepared input exists; set `STAGE_FORCE=1` to rebuild. |
 | `01_build_kb.sh` | Skips if KB records and entities already exist. |
 | `02_answer_seed.sh` | Resumes from `victim_answers.raw.jsonl`; periodically saves answers. |
 | `03_score_seed.sh` | Resumes from `step_evaluations.jsonl.partial`; appends completed score records. |
@@ -121,6 +156,36 @@ STAGE_VLLM_MODE=external bash run/run_full_pipeline.sh gsm8k
 
 In external mode, you must switch vLLM yourself before each stage that requires
 a different served model.
+
+## Independent Model Evaluation
+
+Model accuracy evaluation is intentionally separate from the synthesis pipeline.
+It lives under `evaluation/` and is launched manually. The evaluator first
+prepares the validation set for answer comparison, for example extracting
+`#### 72` from raw GSM8K answers, then asks the served model to answer each
+question with `evaluation/prompt/generate.json`. It writes predictions plus a
+JSON/Markdown report with sample accuracy and pass@k.
+
+Edit `evaluation/eval.env` for routine changes such as model path, input path,
+output directory, temperature, top-p, concurrency, and answers per question.
+`evaluation/eval.example.env` documents the available keys.
+Set `EVAL_MAX_RETRIES=-1` to retry model-answer requests indefinitely.
+
+```bash
+cd /root/brjverl/data_gradual_new
+bash evaluation/run_model_eval.sh gsm8k_2
+```
+
+For multiple answers per question, increase `EVAL_N_ANSWERS`; the report will
+include `pass@1 ... pass@k`.
+
+```bash
+EVAL_N_ANSWERS=5 EVAL_TEMPERATURE=0.7 EVAL_TOP_P=0.95 bash evaluation/run_model_eval.sh gsm8k_2
+```
+
+For data preparation, `CLASSIFY_MAX_RETRIES=-1` makes question classification
+retry indefinitely. If a model returns text outside the configured categories,
+the classifier asks it to choose again from the allowed category list.
 
 ## Validation configuration
 
@@ -160,6 +225,11 @@ Edit `config/pipeline.env`.
 | `REFINE_MAX_ROUNDS` | `-1` | Retry rounds for failed step refinements; `-1` means unlimited |
 | `REFINE_MAX_TOKENS` | `900` | Maximum output tokens for step refinement |
 | `REFINE_CHECKPOINT_EVERY` | `50` | Save refined output every N completed records |
+| `RUN_DATA_PREPARE` | `1` | Enable data preparation in the full pipeline; set `0` to bypass |
+| `DATA_FORMAT_TEMPLATE` | `gsm8k` | Raw-data format adapter, such as `gsm8k` or `passthrough` |
+| `PREPARE_CLASSIFY` | `1` | Fill missing `question_type` values during data preparation |
+| `CLASSIFY_MODEL` | `VLLM_MODEL` | Model used for question classification |
+| `CLASSIFY_CONCURRENCY` | `16` | Concurrent classification requests |
 
 ### Training-Quality Controls
 

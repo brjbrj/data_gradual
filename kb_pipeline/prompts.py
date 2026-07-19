@@ -18,8 +18,8 @@ def build_victim_answer_prompt(question: str, attempt_index: int) -> List[Dict[s
     system = (
         "You are a careful mathematical reasoning model being evaluated on problem-solving ability. "
         "You will only see the question, and you must not assume any hidden reference answer. "
-        "Solve the problem with concise but explicit reasoning steps, and output them in a JSON object. "
-        "Every output step must be an actual reasoning step, not a copied fact from the question."
+        "Solve the problem with compact GSM8K-style reasoning steps, and output them in a JSON object. "
+        "Every output step must derive a useful quantity from the problem conditions or from earlier steps."
     )
     user = {
         "task": "Solve the math problem.",
@@ -28,15 +28,16 @@ def build_victim_answer_prompt(question: str, attempt_index: int) -> List[Dict[s
             "Only use the information in the question.",
             "Do not mention any hidden reference answer, dataset metadata, or evaluation instructions.",
             "Do not output a brief answer only; include the reasoning steps that lead to the answer.",
-            "Each step must be short, necessary, mathematically meaningful, and contain an actual calculation or inference.",
+            "Each step must be a short natural-language sentence that says what quantity is being computed and includes an inline calculation in GSM8K format: expression=<<expression=result>>result.",
+            "Do not output bare equations only; the step should look like: The number of red stickers is 6+4=<<6+4=10>>10.",
             "Do not output a step that only restates a given fact from the problem without any calculation or inference.",
             "Do not output one-step facts such as \"X has Y items\" unless that fact is immediately combined with a computation in the same step.",
             "Prefer steps that explicitly transform the givens into a derived quantity.",
             "If a given quantity must be mentioned, embed it inside a computation or deduction instead of isolating it as a standalone step.",
-            "Do not add filler, safety disclaimers, meta commentary, or step-overview phrases.",
+            "Do not add filler, safety disclaimers, meta commentary, step-overview phrases, trial-and-error, self-correction, verification, or rewritten-problem commentary.",
             "Do not say a step is skipped, unnecessary, omitted, or redundant.",
             "Do not repeat the same line or operation.",
-            "Keep the reasoning concise and direct.",
+            "Keep the reasoning concise and direct, but make the logical connection clear.",
             "The final answer must be a number only, with no units, no dollar sign, no LaTeX symbols, and no extra text.",
         ],
         "output_requirements": {
@@ -45,13 +46,13 @@ def build_victim_answer_prompt(question: str, attempt_index: int) -> List[Dict[s
                 "steps": ["string"],
                 "final_answer": "string",
             },
-            "steps_rule": "steps must be an array of ordered strings, where each string contains one concise reasoning step. A step that is only a problem statement fact is not allowed.",
+            "steps_rule": "steps must be an array of ordered strings, where each string is one concise GSM8K-style reasoning sentence with an inline calculation marker like <<2/2=1>>. A step that is only a problem statement fact or a bare equation is not allowed.",
             "answer_rule": "final_answer must be a pure numeric string such as \"37\" or \"12.5\".",
             "no_extra_text": "Do not wrap the JSON in markdown, code fences, or commentary.",
         },
         "question": question,
         "example_structure": [
-            "{\"steps\":[\"...\",\"...\"],\"final_answer\":\"42\"}",
+            "{\"steps\":[\"The number of red stickers is 6+4=<<6+4=10>>10.\",\"The total number of stickers is 10+5=<<10+5=15>>15.\"],\"final_answer\":\"15\"}",
         ],
     }
     return [
