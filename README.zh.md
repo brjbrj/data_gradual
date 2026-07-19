@@ -475,6 +475,52 @@ outputs/pipeline/<dataset>/train.jsonl
 其中 `output` 会将 validated 记录中的 `steps` 按“一步一行”拼接，并把最终答案单独放在最后一行：`The answer is $\\boxed{XXX}$.`。
 如果某个步骤没有编号，导出器会自动补充 `Step N:`。对于 `Calculate X: ...` 这类机械步骤，导出器会做轻量改写，补充“本步要得到什么中间量、为什么需要它”，让训练目标更像连续推理链条。
 
+## 消融实验
+
+消融实验代码放在 `ablations/`，不会改变主流程已有命令。先将主流程跑到 Stage 03，得到 KB、种子回答和原始 mastery 结果，然后单独运行：
+
+```bash
+bash ablations/run_ablation.sh gsm8k answer_accuracy_only
+bash ablations/run_ablation.sh gsm8k hard_all
+bash ablations/run_ablation.sh gsm8k equal_all
+bash ablations/run_ablation.sh gsm8k easy_all
+bash ablations/run_ablation.sh gsm8k uniform_count
+```
+
+输出目录：
+
+```text
+outputs/ablations/<dataset>/<variant>/
+```
+
+各变体含义：
+
+- `answer_accuracy_only`：移除步骤评价信号，只根据最终答案准确率重新计算 mastery 和合成数量/难度分配。
+- `hard_all`：合成数量仍使用原计算结果，但所有相对难度强制为 `Hard`。
+- `equal_all`：合成数量仍使用原计算结果，但所有相对难度强制为 `Equal`。
+- `easy_all`：合成数量仍使用原计算结果，但所有相对难度强制为 `Easy`。
+- `uniform_count`：难度仍使用原计算结果，但每个种子题的合成数量相同。可通过 `ABLATION_UNIFORM_COUNT=...` 手动指定；不指定时使用原始 `target_count` 的四舍五入均值。
+
+runner 会先生成消融版 `mastery_records.jsonl`，再复用 Stage 04 和 Stage 05，并把所有输出路径改到消融目录。需要继续跑后置环节时加参数：
+
+```bash
+bash ablations/run_ablation.sh gsm8k hard_all --run-validation --run-refine --export
+```
+
+关于后置校验消融：不跑 Stage 07 是支持的，因为 Stage 08 会在没有 `refined.jsonl` 时自动回退到 `validated.jsonl`：
+
+```bash
+bash run/06_validate_generated.sh gsm8k
+bash run/08_export_training_data.sh gsm8k
+```
+
+如果要连 Stage 06 也跳过，需要显式指定导出输入，因为 Stage 08 默认不会直接吃 `generated.jsonl`：
+
+```bash
+EXPORT_INPUT_PATH=/root/brjverl/data_gradual_new/outputs/pipeline/gsm8k/generated.jsonl \
+  bash run/08_export_training_data.sh gsm8k
+```
+
 详见：
 
 ```text

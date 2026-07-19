@@ -438,3 +438,61 @@ appending the final answer on its own line with the strict template
 exporter prefixes `Step N:`. Simple mechanical steps such as `Calculate X: ...`
 are lightly rewritten at export time into goal-oriented wording so the training
 target exposes the purpose of each intermediate value.
+
+## Ablations
+
+Ablation code lives under `ablations/` and does not change the normal stage
+commands. Run the main pipeline through Stage 03 first, then launch isolated
+ablation variants:
+
+```bash
+bash ablations/run_ablation.sh gsm8k answer_accuracy_only
+bash ablations/run_ablation.sh gsm8k hard_all
+bash ablations/run_ablation.sh gsm8k equal_all
+bash ablations/run_ablation.sh gsm8k easy_all
+bash ablations/run_ablation.sh gsm8k uniform_count
+```
+
+Outputs are written to:
+
+```text
+outputs/ablations/<dataset>/<variant>/
+```
+
+Variants:
+
+- `answer_accuracy_only`: removes step scoring from the mastery signal and
+  recomputes allocation from final-answer accuracy only.
+- `hard_all`: keeps the computed per-seed counts but forces every target
+  difficulty to `Hard`.
+- `equal_all`: keeps the computed per-seed counts but forces every target
+  difficulty to `Equal`.
+- `easy_all`: keeps the computed per-seed counts but forces every target
+  difficulty to `Easy`.
+- `uniform_count`: keeps the computed difficulty but gives every seed the same
+  target count. Set `ABLATION_UNIFORM_COUNT=...` to choose the count manually;
+  otherwise the rounded mean of original counts is used.
+
+The runner builds the ablation mastery file, then reuses Stage 04 and Stage 05
+with overridden output paths. Add `--run-validation`, `--run-refine`, and
+`--export` when you want later stages too:
+
+```bash
+bash ablations/run_ablation.sh gsm8k hard_all --run-validation --run-refine --export
+```
+
+For validation ablations, skipping Stage 07 is already supported because Stage
+08 falls back from `refined.jsonl` to `validated.jsonl`:
+
+```bash
+bash run/06_validate_generated.sh gsm8k
+bash run/08_export_training_data.sh gsm8k
+```
+
+Skipping Stage 06 requires an explicit export input because Stage 08 normally
+expects validated or refined records:
+
+```bash
+EXPORT_INPUT_PATH=/root/brjverl/data_gradual_new/outputs/pipeline/gsm8k/generated.jsonl \
+  bash run/08_export_training_data.sh gsm8k
+```
