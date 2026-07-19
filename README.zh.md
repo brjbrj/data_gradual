@@ -32,7 +32,7 @@ cd /jizhicfs/hymiezhao/lpc/repos/brj/data_gradual_new
 export STAGE_VLLM_MODE=external
 ```
 
-阶段脚本会自动读取 `config/pipeline.env`，并使用其中配置的 `PIPELINE_PYTHON` 或 pipeline conda 环境。默认情况下，阶段脚本不会启动、切换或关闭 vLLM；你需要在外部提前启动好当前阶段所需模型。
+阶段脚本会自动读取 `config/pipeline.env`，并使用其中配置的 `PIPELINE_PYTHON` 或 pipeline conda 环境。默认情况下，阶段脚本会跟随 `config/pipeline.env` 中的 `VLLM_RUNTIME_MODE`；如果想强制外部手动管理 vLLM，可设置 `STAGE_VLLM_MODE=external`，如果想强制脚本托管启动/切换 vLLM，可设置 `STAGE_VLLM_MODE=managed`。
 
 ### 阶段命令
 
@@ -167,10 +167,10 @@ GEN_RESUME=0 bash run/05_generate_questions.sh gsm8k --no-resume
 STAGE_VLLM_MODE=managed bash run/05_generate_questions.sh gsm8k
 ```
 
-如果希望阶段结束时自动关闭这个 managed vLLM：
+单独运行某个阶段时，managed 模式会先检查已有 vLLM：如果模型匹配，就直接复用并保留；如果服务不可用或模型不匹配，就先关闭当前 vLLM，再启动该阶段需要的模型。凡是由这个单阶段脚本启动或切换出来的 vLLM，阶段结束会默认自动关闭。若你想保留模型给下一条手动 stage 命令复用，可以显式关闭这个清理行为：
 
 ```bash
-STAGE_VLLM_MODE=managed STAGE_VLLM_STOP_ON_EXIT=1 bash run/05_generate_questions.sh gsm8k
+STAGE_VLLM_MODE=managed STAGE_VLLM_STOP_ON_EXIT=0 bash run/05_generate_questions.sh gsm8k
 ```
 
 ## 旧命令兼容

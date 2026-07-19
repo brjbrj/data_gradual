@@ -217,7 +217,7 @@ stage_ensure_vllm() {
     return 0
   fi
 
-  local mode="${STAGE_VLLM_MODE:-external}"
+  local mode="${STAGE_VLLM_MODE:-${VLLM_RUNTIME_MODE:-external}}"
   local timeout
   local poll
   if [[ "${mode}" == "managed" ]]; then
@@ -240,13 +240,15 @@ stage_ensure_vllm() {
       stage_log "reusing managed vLLM for ${label}: ${expected}"
       return 0
     fi
+    stage_log "managed vLLM will stop the current non-matching or unhealthy service before starting ${label}"
+    bash "${STAGE_ROOT_DIR}/run/stop_vllm.sh" --pid-file "${pid_file}" >/dev/null 2>&1 || true
     stage_log "starting managed vLLM for ${label}: ${expected}"
     bash "${STAGE_ROOT_DIR}/run/start_vllm.sh" \
       --background \
       --pid-file "${pid_file}" \
       --log-file "${log_file}" \
       --model "${expected}" >/dev/null
-    if [[ "${STAGE_VLLM_STOP_ON_EXIT:-0}" == "1" ]]; then
+    if [[ "${STAGE_VLLM_STOP_ON_EXIT:-1}" == "1" ]]; then
       STAGE_MANAGED_PID_FILE="${pid_file}"
       export STAGE_MANAGED_PID_FILE
       trap stage_cleanup_managed_vllm EXIT

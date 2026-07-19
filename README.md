@@ -35,9 +35,9 @@ export STAGE_VLLM_MODE=external
 The stage launchers automatically load `config/pipeline.env`, activate or use
 the configured `PIPELINE_PYTHON`, and write outputs under `OUTPUT_DIR`.
 
-The default stage mode is external vLLM: start the needed model yourself, then
-run the corresponding stage. The script only checks `/v1/models` and will not
-start, switch, or stop vLLM unless you explicitly set `STAGE_VLLM_MODE=managed`.
+By default, stage scripts follow `VLLM_RUNTIME_MODE` from `config/pipeline.env`.
+Set `STAGE_VLLM_MODE=external` to force manual vLLM management, or
+`STAGE_VLLM_MODE=managed` to force script-managed start/switch behavior.
 
 ### Stage Commands
 
@@ -156,6 +156,16 @@ STAGE_VLLM_MODE=external bash run/run_full_pipeline.sh gsm8k
 
 In external mode, you must switch vLLM yourself before each stage that requires
 a different served model.
+
+For an individual stage in managed mode, an already running matching vLLM
+service is reused and left running. If the running service is unhealthy or
+serves the wrong model, the stage stops it and starts the required model. Any
+vLLM service started or switched by that single stage is stopped when the stage
+exits. Keep it alive for the next manual stage only when you explicitly opt out:
+
+```bash
+STAGE_VLLM_MODE=managed STAGE_VLLM_STOP_ON_EXIT=0 bash run/02_answer_seed.sh gsm8k
+```
 
 ## Independent Model Evaluation
 

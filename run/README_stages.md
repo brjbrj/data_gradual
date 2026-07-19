@@ -1,7 +1,8 @@
 # Stage Scripts
 
 These scripts split the full pipeline into independent stages. By default they
-use an externally started vLLM server and do not start, switch, or stop vLLM.
+follow `VLLM_RUNTIME_MODE` from `config/pipeline.env`. Use `STAGE_VLLM_MODE` to
+override that setting for a command.
 
 ```bash
 cd /path/to/data_gradual_new
@@ -151,10 +152,14 @@ If you explicitly want a stage script to start vLLM:
 STAGE_VLLM_MODE=managed bash run/05_generate_questions.sh gsm8k
 ```
 
-To stop the managed vLLM when the stage exits:
+For a single managed stage, an already running matching vLLM service is reused
+and left running. If the current service is unhealthy or serves the wrong model,
+the stage stops it and starts the required model. Any service started or
+switched by that single stage is stopped when the stage exits. To keep it alive
+for the next manual stage:
 
 ```bash
-STAGE_VLLM_MODE=managed STAGE_VLLM_STOP_ON_EXIT=1 bash run/05_generate_questions.sh gsm8k
+STAGE_VLLM_MODE=managed STAGE_VLLM_STOP_ON_EXIT=0 bash run/05_generate_questions.sh gsm8k
 ```
 
 ## Common Overrides
