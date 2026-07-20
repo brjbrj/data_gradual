@@ -321,6 +321,33 @@ and server log. This prevents a dataset-name change from misclassifying the
 same managed service as an external process. Do not run two full pipelines
 concurrently against the same managed port.
 
+### Parallel managed experiments
+
+Two managed experiments can run on the same machine only when their vLLM ports,
+runtime files, output directories, and GPU sets are separated. Use the overlay
+config support instead of editing `config/pipeline.env` back and forth:
+
+```bash
+PIPELINE_CONFIG_FILE=config/parallel_exp_a.example.env bash run/run_stage_sequence.sh gsm8k
+PIPELINE_CONFIG_FILE=config/parallel_exp_b.example.env bash run/run_stage_sequence.sh gsm8k
+```
+
+Each overlay is loaded after `config/pipeline.env`. At minimum, make these
+values different between the two experiments:
+
+```bash
+VLLM_BASE_URL=http://127.0.0.1:8911/v1
+VLLM_API_PORT=8911
+OUTPUT_DIR=/path/to/outputs_exp_a
+VLLM_PID_FILE=/path/to/outputs_exp_a/runtime/vllm/vllm.pid
+VLLM_LOG_FILE=/path/to/outputs_exp_a/runtime/vllm/vllm.log
+VLLM_CUDA_VISIBLE_DEVICES=0,1
+```
+
+Use another port/output/runtime directory/GPU set for the second experiment.
+With these settings, model switches and shutdowns are scoped to the configured
+PID file and port rather than every vLLM process on the machine.
+
 Foreground logging is configurable:
 
 ```bash

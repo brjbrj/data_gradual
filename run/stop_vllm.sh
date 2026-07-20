@@ -2,9 +2,22 @@
 set -euo pipefail
 
 PID_FILE=""
-if [[ "${1:-}" == "--pid-file" ]]; then
-  PID_FILE="${2:-}"
-fi
+PORT=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --pid-file)
+      PID_FILE="${2:-}"
+      shift 2
+      ;;
+    --port)
+      PORT="${2:-}"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
 SELF_PGID="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d '[:space:]' || true)"
 
 wait_for_exit() {
@@ -44,6 +57,27 @@ signal_process_tree() {
   kill "-${signal_name}" "${parent_pid}" >/dev/null 2>&1 || true
 }
 
+api_server_pids() {
+  if [[ -n "${PORT}" ]]; then
+    ps -eo pid=,args= | awk -v port="${PORT}" '
+      /[v]llm\.entrypoints\.openai\.api_server/ {
+        for (i = 1; i <= NF; i++) {
+          if ($i == "--port" && (i + 1) <= NF && $(i + 1) == port) {
+            print $1
+            next
+          }
+          if ($i == "--port=" port) {
+            print $1
+            next
+          }
+        }
+      }
+    '
+  else
+    pgrep -f "vllm.entrypoints.openai.api_server" || true
+  fi
+}
+
 if [[ -n "${PID_FILE}" && -f "${PID_FILE}" ]]; then
   PID="$(cat "${PID_FILE}")"
   if kill -0 "${PID}" >/dev/null 2>&1; then
@@ -78,7 +112,7 @@ if [[ -n "${PID_FILE}" && -f "${PID_FILE}" ]]; then
   rm -f "${PID_FILE}" "${PID_FILE}.pgid" "${PID_FILE%.pid}.model" "${PID_FILE%.pid}.python"
 else
   # Compatibility fallback for servers started before process-group tracking.
-  API_PIDS="$(pgrep -f "vllm.entrypoints.openai.api_server" || true)"
+  API_PIDS="$(api_server_pids || true)"
   if [[ -n "${API_PIDS}" ]]; then
     while read -r pid; do
       [[ -z "${pid}" || "${pid}" == "$$" ]] && continue

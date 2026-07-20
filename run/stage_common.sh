@@ -236,12 +236,17 @@ stage_ensure_vllm() {
   if [[ "${mode}" == "managed" ]]; then
     local pid_file="${VLLM_PID_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.pid}"
     local log_file="${VLLM_LOG_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.log}"
+    local api_port="${VLLM_API_PORT:-${VLLM_PORT:-}}"
     if stage_check_served_model "${expected}"; then
       stage_log "reusing managed vLLM for ${label}: ${expected}"
       return 0
     fi
     stage_log "managed vLLM will stop the current non-matching or unhealthy service before starting ${label}"
-    bash "${STAGE_ROOT_DIR}/run/stop_vllm.sh" --pid-file "${pid_file}" >/dev/null 2>&1 || true
+    STOP_ARGS=(--pid-file "${pid_file}")
+    if [[ -n "${api_port}" ]]; then
+      STOP_ARGS+=(--port "${api_port}")
+    fi
+    bash "${STAGE_ROOT_DIR}/run/stop_vllm.sh" "${STOP_ARGS[@]}" >/dev/null 2>&1 || true
     stage_log "starting managed vLLM for ${label}: ${expected}"
     bash "${STAGE_ROOT_DIR}/run/start_vllm.sh" \
       --background \
@@ -287,6 +292,10 @@ stage_require_file() {
 
 stage_cleanup_managed_vllm() {
   if [[ -n "${STAGE_MANAGED_PID_FILE:-}" ]]; then
-    bash "${STAGE_ROOT_DIR}/run/stop_vllm.sh" --pid-file "${STAGE_MANAGED_PID_FILE}" >/dev/null 2>&1 || true
+    STOP_ARGS=(--pid-file "${STAGE_MANAGED_PID_FILE}")
+    if [[ -n "${VLLM_API_PORT:-${VLLM_PORT:-}}" ]]; then
+      STOP_ARGS+=(--port "${VLLM_API_PORT:-${VLLM_PORT:-}}")
+    fi
+    bash "${STAGE_ROOT_DIR}/run/stop_vllm.sh" "${STOP_ARGS[@]}" >/dev/null 2>&1 || true
   fi
 }

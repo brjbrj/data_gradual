@@ -19,6 +19,18 @@ ${OUTPUT_DIR}/planning/${DATASET_NAME}
 ${OUTPUT_DIR}/pipeline/${DATASET_NAME}
 ```
 
+To run two experiments with different ports or output directories, keep
+`config/pipeline.env` as the base config and pass an overlay file:
+
+```bash
+PIPELINE_CONFIG_FILE=config/parallel_exp_a.example.env bash run/run_stage_sequence.sh gsm8k
+PIPELINE_CONFIG_FILE=config/parallel_exp_b.example.env bash run/run_stage_sequence.sh gsm8k
+```
+
+The overlay is sourced after the base config, so it can override only
+`VLLM_BASE_URL`, `VLLM_API_PORT`, `OUTPUT_DIR`, `VLLM_PID_FILE`,
+`VLLM_LOG_FILE`, GPU settings, or experiment-specific knobs.
+
 The vLLM check calls `/v1/models` with `Authorization: Bearer ${VLLM_API_KEY}`.
 It accepts full paths, trailing slashes, and basename-only model IDs as matches.
 

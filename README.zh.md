@@ -350,6 +350,30 @@ VLLM_USE_FLASHINFER=0
 FLASHINFER_DISABLE_JIT=1
 ```
 
+### 同一机器并行跑两个 managed 实验
+
+可以并行，但不能只改端口。两个实验的 vLLM 端口、输出目录、PID 文件、日志文件和 GPU 分配都应分开。现在支持通过 `PIPELINE_CONFIG_FILE` 加载 overlay 配置文件：先读取 `config/pipeline.env`，再读取指定的覆盖配置。
+
+两个终端可以这样启动：
+
+```bash
+PIPELINE_CONFIG_FILE=config/parallel_exp_a.example.env bash run/run_stage_sequence.sh gsm8k
+PIPELINE_CONFIG_FILE=config/parallel_exp_b.example.env bash run/run_stage_sequence.sh gsm8k
+```
+
+每个 overlay 至少需要区分这些项：
+
+```bash
+VLLM_BASE_URL=http://127.0.0.1:8911/v1
+VLLM_API_PORT=8911
+OUTPUT_DIR=/path/to/outputs_exp_a
+VLLM_PID_FILE=/path/to/outputs_exp_a/runtime/vllm/vllm.pid
+VLLM_LOG_FILE=/path/to/outputs_exp_a/runtime/vllm/vllm.log
+VLLM_CUDA_VISIBLE_DEVICES=0,1
+```
+
+第二个实验使用另一个端口、另一个输出/运行目录和另一组 GPU。这样脚本切换或关闭 vLLM 时会按当前配置的 PID 文件和端口处理，不会误关另一组实验。
+
 ## 合成计划输出
 
 合成计划文件：

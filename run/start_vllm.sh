@@ -265,9 +265,21 @@ unset VLLM_PYTHON_FILE
 
 if [[ -f "${PID_FILE}" ]]; then
   bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}"
-elif ps -eo pid=,args= | awk '/[v]llm\.entrypoints\.openai\.api_server/ {found=1} END {exit found ? 0 : 1}'; then
-  echo "[start_vllm] an unmanaged vLLM API server is already running." >&2
-  echo "[start_vllm] stop it explicitly before starting another model." >&2
+elif ps -eo pid=,args= | awk -v port="${PORT}" '
+  /[v]llm\.entrypoints\.openai\.api_server/ {
+    for (i = 1; i <= NF; i++) {
+      if ($i == "--port" && (i + 1) <= NF && $(i + 1) == port) {
+        found = 1
+      }
+      if ($i == "--port=" port) {
+        found = 1
+      }
+    }
+  }
+  END {exit found ? 0 : 1}
+'; then
+  echo "[start_vllm] an unmanaged vLLM API server is already running on port ${PORT}." >&2
+  echo "[start_vllm] stop that port explicitly before starting another model." >&2
   exit 1
 fi
 
