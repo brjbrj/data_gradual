@@ -8,6 +8,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -172,6 +173,20 @@ class VLLMManager:
             return "<none>"
         return "[" + ", ".join(models) + "]"
 
+    @staticmethod
+    def _configured_port() -> Optional[str]:
+        port = os.environ.get("VLLM_API_PORT") or os.environ.get("VLLM_PORT")
+        if port:
+            return str(port).strip()
+        base_url = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8911/v1")
+        try:
+            parsed = urlparse(base_url)
+        except Exception:
+            return None
+        if parsed.port:
+            return str(parsed.port)
+        return None
+
     def _registered_python_matches_config(self) -> bool:
         expected = normalize_whitespace(os.environ.get("VLLM_PYTHON", ""))
         if not expected:
@@ -249,10 +264,13 @@ class VLLMManager:
         if not force and not self.owned:
             return
         script = _project_root() / "run" / "stop_vllm.sh"
+        command = ["bash", str(script)]
         if self.pid_file.exists():
-            self._run(["bash", str(script), "--pid-file", str(self.pid_file)])
-        else:
-            self._run(["bash", str(script)])
+            command.extend(["--pid-file", str(self.pid_file)])
+        port = self._configured_port()
+        if port:
+            command.extend(["--port", port])
+        self._run(command)
         for _ in range(30):
             time.sleep(1)
             if self.probe() is None:
@@ -459,6 +477,11 @@ def run_pipeline(
     synthesis_min_per_seed: Optional[int] = None,
     synthesis_max_per_seed: Optional[int] = None,
     synthesis_balance_lambda: Optional[float] = None,
+    synthesis_allocation_policy: Optional[str] = None,
+    synthesis_active_threshold: Optional[int] = None,
+    synthesis_marginal_alpha: Optional[float] = None,
+    synthesis_threshold_boost: Optional[float] = None,
+    synthesis_cold_start_factor: Optional[float] = None,
     run_validation: Optional[bool] = None,
     vllm_start_timeout_sec: int = 300,
     vllm_start_poll_sec: int = 5,
@@ -483,6 +506,11 @@ def run_pipeline(
     synthesis_min_per_seed = synthesis_min_per_seed if synthesis_min_per_seed is not None else _parse_int_env("SYNTHESIS_MIN_PER_SEED", default=10)
     synthesis_max_per_seed = synthesis_max_per_seed if synthesis_max_per_seed is not None else _parse_int_env("SYNTHESIS_MAX_PER_SEED", default=50)
     synthesis_balance_lambda = synthesis_balance_lambda if synthesis_balance_lambda is not None else _parse_float_env("SYNTHESIS_BALANCE_LAMBDA", default=0.3)
+    synthesis_allocation_policy = synthesis_allocation_policy or os.environ.get("SYNTHESIS_ALLOCATION_POLICY", "legacy")
+    synthesis_active_threshold = synthesis_active_threshold if synthesis_active_threshold is not None else _parse_int_env("SYNTHESIS_ACTIVE_THRESHOLD", default=0)
+    synthesis_marginal_alpha = synthesis_marginal_alpha if synthesis_marginal_alpha is not None else _parse_float_env("SYNTHESIS_MARGINAL_ALPHA", default=0.7)
+    synthesis_threshold_boost = synthesis_threshold_boost if synthesis_threshold_boost is not None else _parse_float_env("SYNTHESIS_THRESHOLD_BOOST", default=2.0)
+    synthesis_cold_start_factor = synthesis_cold_start_factor if synthesis_cold_start_factor is not None else _parse_float_env("SYNTHESIS_COLD_START_FACTOR", default=0.0)
     run_validation = run_validation if run_validation is not None else _parse_bool_env("RUN_VALIDATION", default=True)
     step_model = step_model or os.environ.get("STEP_MODEL") or os.environ.get("JUDGE_MODEL") or os.environ.get("VLLM_JUDGE_MODEL") or os.environ.get("GEN_MODEL") or os.environ.get("VLLM_GEN_MODEL") or os.environ.get("VLLM_MODEL") or "/root/brjverl/models/Qwen3.6-27B"
     qc_model = qc_model or os.environ.get("QC_MODEL") or os.environ.get("QUALITY_MODEL") or step_model
@@ -518,6 +546,8 @@ def run_pipeline(
         _log(f"[pipeline] synthesis_min_per_seed={synthesis_min_per_seed}")
         _log(f"[pipeline] synthesis_max_per_seed={synthesis_max_per_seed}")
         _log(f"[pipeline] synthesis_balance_lambda={synthesis_balance_lambda}")
+        _log(f"[pipeline] synthesis_allocation_policy={synthesis_allocation_policy}")
+        _log(f"[pipeline] synthesis_active_threshold={synthesis_active_threshold}")
         _log(f"[pipeline] run_validation={run_validation}")
         _log(f"[pipeline] vllm_runtime_mode={vllm_runtime_mode}")
         _log(f"[pipeline] step_model={step_model}")
@@ -574,6 +604,11 @@ def run_pipeline(
             n_min=synthesis_min_per_seed,
             n_max=synthesis_max_per_seed,
             lambda_balance=synthesis_balance_lambda,
+            allocation_policy=synthesis_allocation_policy,
+            active_threshold=synthesis_active_threshold,
+            marginal_alpha=synthesis_marginal_alpha,
+            threshold_boost=synthesis_threshold_boost,
+            cold_start_factor=synthesis_cold_start_factor,
         )
         write_jsonl(analysis_dir / "mastery_records.jsonl", mastery_records)
         write_json(analysis_dir / "mastery.json", mastery_records)
@@ -767,6 +802,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--synthesis-min-per-seed", type=int, required=False)
     parser.add_argument("--synthesis-max-per-seed", type=int, required=False)
     parser.add_argument("--synthesis-balance-lambda", type=float, required=False)
+    parser.add_argument("--synthesis-allocation-policy", required=False)
+    parser.add_argument("--synthesis-active-threshold", type=int, required=False)
+    parser.add_argument("--synthesis-marginal-alpha", type=float, required=False)
+    parser.add_argument("--synthesis-threshold-boost", type=float, required=False)
+    parser.add_argument("--synthesis-cold-start-factor", type=float, required=False)
     parser.add_argument("--skip-validation", action="store_true", help="Stop after generation")
     parser.add_argument("--vllm-start-timeout-sec", type=int, default=None, help="Seconds to wait for vLLM startup before failing; -1 waits indefinitely in external mode")
     parser.add_argument("--vllm-start-poll-sec", type=int, default=None, help="Polling interval in seconds while waiting for vLLM startup")
@@ -850,6 +890,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         synthesis_min_per_seed=args.synthesis_min_per_seed,
         synthesis_max_per_seed=args.synthesis_max_per_seed,
         synthesis_balance_lambda=args.synthesis_balance_lambda,
+        synthesis_allocation_policy=args.synthesis_allocation_policy,
+        synthesis_active_threshold=args.synthesis_active_threshold,
+        synthesis_marginal_alpha=args.synthesis_marginal_alpha,
+        synthesis_threshold_boost=args.synthesis_threshold_boost,
+        synthesis_cold_start_factor=args.synthesis_cold_start_factor,
         run_validation=False if args.skip_validation else None,
         vllm_start_timeout_sec=vllm_start_timeout_sec,
         vllm_start_poll_sec=vllm_start_poll_sec,

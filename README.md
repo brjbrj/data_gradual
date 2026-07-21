@@ -255,6 +255,35 @@ formulaic, or obviously training-unfriendly as warnings by default, so
 mathematically correct samples are not forced into expensive repair loops.
 Set `QC_TRAINING_STYLE_HARD_FAIL=1` if you prefer strict filtering.
 
+### Synthesis allocation policies
+
+The original allocation remains the default:
+
+```bash
+SYNTHESIS_ALLOCATION_POLICY=legacy
+SYNTHESIS_MIN_PER_SEED=10
+SYNTHESIS_MAX_PER_SEED=50
+```
+
+To concentrate budget on seeds that can form a useful local training cluster,
+enable the threshold-marginal policy:
+
+```bash
+SYNTHESIS_ALLOCATION_POLICY=threshold_marginal
+SYNTHESIS_MIN_PER_SEED=0
+SYNTHESIS_MAX_PER_SEED=50
+SYNTHESIS_ACTIVE_THRESHOLD=5
+SYNTHESIS_MARGINAL_ALPHA=0.7
+SYNTHESIS_THRESHOLD_BOOST=2.0
+SYNTHESIS_COLD_START_FACTOR=0.0
+```
+
+This policy first estimates a `0..SYNTHESIS_MAX_PER_SEED` budget per seed.
+Seeds below `SYNTHESIS_ACTIVE_THRESHOLD` are pooled unless their value and
+closeness to the threshold justify activation. Remaining budget is assigned to
+activated seeds by a diminishing marginal score, so high-value seeds receive
+more samples but become less likely to monopolize later allocations.
+
 ### Moving to another machine
 
 Normally, only these values need to change:
@@ -347,6 +376,11 @@ VLLM_CUDA_VISIBLE_DEVICES=0,1
 Use another port/output/runtime directory/GPU set for the second experiment.
 With these settings, model switches and shutdowns are scoped to the configured
 PID file and port rather than every vLLM process on the machine.
+If the PID file is missing, stale, or points at another port, shutdown falls
+back only to the configured port. The port is read from `VLLM_API_PORT` /
+`VLLM_PORT`, or parsed from `VLLM_BASE_URL` if those are not set. Without a
+port, `stop_vllm.sh` refuses the old global fallback unless
+`STOP_VLLM_ALLOW_GLOBAL=1` is set explicitly.
 
 Foreground logging is configurable:
 

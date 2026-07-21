@@ -20,6 +20,13 @@ while [[ $# -gt 0 ]]; do
 done
 SELF_PGID="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d '[:space:]' || true)"
 
+cmdline_has_port() {
+  local cmdline="$1"
+  local port="$2"
+  [[ -z "${port}" ]] && return 0
+  [[ " ${cmdline} " == *" --port ${port} "* || " ${cmdline} " == *" --port=${port} "* ]]
+}
+
 wait_for_exit() {
   local pid="$1"
   local attempts="${2:-30}"
@@ -57,6 +64,22 @@ signal_process_tree() {
   kill "-${signal_name}" "${parent_pid}" >/dev/null 2>&1 || true
 }
 
+stop_api_pids() {
+  local pids="$1"
+  [[ -z "${pids}" ]] && return 0
+  while read -r pid; do
+    [[ -z "${pid}" || "${pid}" == "$$" ]] && continue
+    signal_process_tree TERM "${pid}"
+  done <<< "${pids}"
+  sleep 5
+  while read -r pid; do
+    [[ -z "${pid}" || "${pid}" == "$$" ]] && continue
+    if kill -0 "${pid}" >/dev/null 2>&1; then
+      signal_process_tree KILL "${pid}"
+    fi
+  done <<< "${pids}"
+}
+
 api_server_pids() {
   if [[ -n "${PORT}" ]]; then
     ps -eo pid=,args= | awk -v port="${PORT}" '
@@ -73,8 +96,12 @@ api_server_pids() {
         }
       }
     '
-  else
+  elif [[ "${STOP_VLLM_ALLOW_GLOBAL:-0}" == "1" ]]; then
     pgrep -f "vllm.entrypoints.openai.api_server" || true
+  else
+    echo "[stop_vllm] no usable PID file and no --port; refusing global vLLM shutdown" >&2
+    echo "[stop_vllm] pass --port or set STOP_VLLM_ALLOW_GLOBAL=1 to allow the old global fallback" >&2
+    return 0
   fi
 }
 
@@ -85,15 +112,30 @@ if [[ -n "${PID_FILE}" && -f "${PID_FILE}" ]]; then
     if [[ "${CMDLINE}" != *"vllm.entrypoints.openai.api_server"* ]]; then
       echo "[stop_vllm] stale PID file ignored; PID ${PID} is not vLLM" >&2
       rm -f "${PID_FILE}" "${PID_FILE}.pgid" "${PID_FILE%.pid}.model" "${PID_FILE%.pid}.python"
+      API_PIDS="$(api_server_pids || true)"
+      stop_api_pids "${API_PIDS}"
+      exit 0
+    fi
+    if ! cmdline_has_port "${CMDLINE}" "${PORT}"; then
+      echo "[stop_vllm] PID file points to vLLM on a different port; falling back to --port ${PORT}" >&2
+      API_PIDS="$(api_server_pids || true)"
+      stop_api_pids "${API_PIDS}"
+      rm -f "${PID_FILE}" "${PID_FILE}.pgid" "${PID_FILE%.pid}.model" "${PID_FILE%.pid}.python"
       exit 0
     fi
 
     PGID=""
+    ACTUAL_PGID="$(ps -o pgid= -p "${PID}" 2>/dev/null | tr -d '[:space:]' || true)"
     if [[ -f "${PID_FILE}.pgid" ]]; then
-      PGID="$(cat "${PID_FILE}.pgid")"
+      RECORDED_PGID="$(cat "${PID_FILE}.pgid")"
+      if [[ -n "${RECORDED_PGID}" && "${RECORDED_PGID}" == "${ACTUAL_PGID}" ]]; then
+        PGID="${RECORDED_PGID}"
+      else
+        echo "[stop_vllm] stale PGID file ignored for PID ${PID}" >&2
+      fi
     fi
     if [[ -z "${PGID}" ]]; then
-      PGID="$(ps -o pgid= -p "${PID}" 2>/dev/null | tr -d '[:space:]' || true)"
+      PGID="${ACTUAL_PGID}"
     fi
 
     if [[ -n "${PGID}" && "${PGID}" != "${SELF_PGID}" ]]; then
@@ -108,22 +150,16 @@ if [[ -n "${PID_FILE}" && -f "${PID_FILE}" ]]; then
         signal_process_tree KILL "${PID}"
       fi
     fi
+  else
+    echo "[stop_vllm] stale PID file ignored; PID ${PID} is not running" >&2
+    rm -f "${PID_FILE}" "${PID_FILE}.pgid" "${PID_FILE%.pid}.model" "${PID_FILE%.pid}.python"
+    API_PIDS="$(api_server_pids || true)"
+    stop_api_pids "${API_PIDS}"
+    exit 0
   fi
   rm -f "${PID_FILE}" "${PID_FILE}.pgid" "${PID_FILE%.pid}.model" "${PID_FILE%.pid}.python"
 else
   # Compatibility fallback for servers started before process-group tracking.
   API_PIDS="$(api_server_pids || true)"
-  if [[ -n "${API_PIDS}" ]]; then
-    while read -r pid; do
-      [[ -z "${pid}" || "${pid}" == "$$" ]] && continue
-      signal_process_tree TERM "${pid}"
-    done <<< "${API_PIDS}"
-    sleep 5
-    while read -r pid; do
-      [[ -z "${pid}" || "${pid}" == "$$" ]] && continue
-      if kill -0 "${pid}" >/dev/null 2>&1; then
-        signal_process_tree KILL "${pid}"
-      fi
-    done <<< "${API_PIDS}"
-  fi
+  stop_api_pids "${API_PIDS}"
 fi

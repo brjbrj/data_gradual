@@ -321,6 +321,30 @@ REFINE_CHECKPOINT_EVERY=50
 - `REFINE_*` 参数控制步骤改写阶段的并发、最大轮数、token 和 checkpoint；`REFINE_MAX_ROUNDS=-1` 表示无限重试。
 - 被拒绝的样本不会直接进入训练数据，而是进入已有的重新生成、修复或 replan 流程。
 
+### 合成数量分配策略
+
+旧分配方法仍然是默认值：
+
+```bash
+SYNTHESIS_ALLOCATION_POLICY=legacy
+SYNTHESIS_MIN_PER_SEED=10
+SYNTHESIS_MAX_PER_SEED=50
+```
+
+如果希望把预算集中到更有价值、能形成足够厚训练簇的种子题上，可以开启门槛-边际收益分配：
+
+```bash
+SYNTHESIS_ALLOCATION_POLICY=threshold_marginal
+SYNTHESIS_MIN_PER_SEED=0
+SYNTHESIS_MAX_PER_SEED=50
+SYNTHESIS_ACTIVE_THRESHOLD=5
+SYNTHESIS_MARGINAL_ALPHA=0.7
+SYNTHESIS_THRESHOLD_BOOST=2.0
+SYNTHESIS_COLD_START_FACTOR=0.0
+```
+
+该策略第一轮仍按原始训练价值估计每题 `0..SYNTHESIS_MAX_PER_SEED` 的预算；低于 `SYNTHESIS_ACTIVE_THRESHOLD` 的题不会直接保留，而是进入回收池。系统会根据“训练价值”和“距离门槛的接近程度”决定是否激活这些题；剩余预算再按边际收益递减分给已激活题目，使高价值题获得更厚的局部扩展，同时避免单个题持续垄断预算。
+
 ## vLLM / NCCL 配置说明
 
 `start_vllm.sh --dry-run` 可以查看最终环境变量和启动命令：
@@ -373,6 +397,8 @@ VLLM_CUDA_VISIBLE_DEVICES=0,1
 ```
 
 第二个实验使用另一个端口、另一个输出/运行目录和另一组 GPU。这样脚本切换或关闭 vLLM 时会按当前配置的 PID 文件和端口处理，不会误关另一组实验。
+
+vLLM 关闭逻辑现在是端口隔离的：全流程退出、单阶段退出和模型切换都会把当前配置的端口传给 `run/stop_vllm.sh`。端口优先来自 `VLLM_API_PORT` / `VLLM_PORT`，如果没写则从 `VLLM_BASE_URL` 解析。如果 PID 文件缺失、过期或误指向其他端口，脚本只会回退处理当前端口；没有 `--port` 时默认拒绝全局关闭所有 vLLM。只有显式设置 `STOP_VLLM_ALLOW_GLOBAL=1` 才会启用旧的全局兜底行为。
 
 ## 合成计划输出
 

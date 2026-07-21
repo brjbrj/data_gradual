@@ -29,4 +29,9 @@ stage_log "03 score_seed input=${VICTIM_ANSWER_RAW_PATH} output=${STEP_EVALUATIO
   --synthesis-min-per-seed "${SYNTHESIS_MIN_PER_SEED:-10}" \
   --synthesis-max-per-seed "${SYNTHESIS_MAX_PER_SEED:-50}" \
   --synthesis-balance-lambda "${SYNTHESIS_BALANCE_LAMBDA:-0.3}" \
+  --synthesis-allocation-policy "${SYNTHESIS_ALLOCATION_POLICY:-legacy}" \
+  --synthesis-active-threshold "${SYNTHESIS_ACTIVE_THRESHOLD:-0}" \
+  --synthesis-marginal-alpha "${SYNTHESIS_MARGINAL_ALPHA:-0.7}" \
+  --synthesis-threshold-boost "${SYNTHESIS_THRESHOLD_BOOST:-2.0}" \
+  --synthesis-cold-start-factor "${SYNTHESIS_COLD_START_FACTOR:-0.0}" \
   "${STAGE_REMAINING_ARGS[@]}"

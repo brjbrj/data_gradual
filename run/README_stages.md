@@ -31,6 +31,14 @@ The overlay is sourced after the base config, so it can override only
 `VLLM_BASE_URL`, `VLLM_API_PORT`, `OUTPUT_DIR`, `VLLM_PID_FILE`,
 `VLLM_LOG_FILE`, GPU settings, or experiment-specific knobs.
 
+Managed vLLM shutdown is scoped by the configured port. Sequence cleanup,
+single-stage cleanup, and model switching pass the active port to
+`run/stop_vllm.sh`; the port is read from `VLLM_API_PORT` / `VLLM_PORT`, or
+parsed from `VLLM_BASE_URL` if those are not set. If a PID file is missing,
+stale, or points at another port, the fallback only touches the current port.
+Without a port, `stop_vllm.sh` refuses the old global fallback unless
+`STOP_VLLM_ALLOW_GLOBAL=1` is set explicitly.
+
 The vLLM check calls `/v1/models` with `Authorization: Bearer ${VLLM_API_KEY}`.
 It accepts full paths, trailing slashes, and basename-only model IDs as matches.
 
@@ -182,4 +190,17 @@ INPUT_PATH=/path/to/gsm8k.jsonl
 OUTPUT_DIR=/path/to/outputs
 N_ANSWERS=10
 STAGE_VLLM_WAIT_TIMEOUT=0
+```
+
+The original synthesis allocation is preserved with
+`SYNTHESIS_ALLOCATION_POLICY=legacy`. To concentrate budget into dense,
+high-value seed clusters:
+
+```bash
+SYNTHESIS_ALLOCATION_POLICY=threshold_marginal
+SYNTHESIS_MIN_PER_SEED=0
+SYNTHESIS_ACTIVE_THRESHOLD=5
+SYNTHESIS_MAX_PER_SEED=50
+SYNTHESIS_MARGINAL_ALPHA=0.7
+SYNTHESIS_THRESHOLD_BOOST=2.0
 ```

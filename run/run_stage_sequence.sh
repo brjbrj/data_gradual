@@ -20,8 +20,13 @@ export STAGE_SEQUENCE_VLLM_MODE="${STAGE_VLLM_MODE}"
 if [[ "${STAGE_VLLM_MODE}" == "managed" ]]; then
   export STAGE_VLLM_STOP_ON_EXIT="${STAGE_VLLM_STOP_ON_EXIT:-0}"
   STAGE_SEQUENCE_PID_FILE="${VLLM_PID_FILE:-${OUTPUT_DIR:-${ROOT_DIR}/outputs}/runtime/vllm/vllm.pid}"
+  STAGE_SEQUENCE_API_PORT="$(resolve_vllm_api_port || true)"
   cleanup_sequence_vllm() {
-    bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${STAGE_SEQUENCE_PID_FILE}" >/dev/null 2>&1 || true
+    STOP_ARGS=(--pid-file "${STAGE_SEQUENCE_PID_FILE}")
+    if [[ -n "${STAGE_SEQUENCE_API_PORT}" ]]; then
+      STOP_ARGS+=(--port "${STAGE_SEQUENCE_API_PORT}")
+    fi
+    bash "${ROOT_DIR}/run/stop_vllm.sh" "${STOP_ARGS[@]}" >/dev/null 2>&1 || true
   }
   trap cleanup_sequence_vllm EXIT INT TERM
 fi

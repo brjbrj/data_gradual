@@ -68,6 +68,170 @@ def _source_question_type(source: Dict[str, Any]) -> str:
     return value or "unknown"
 
 
+def _rebalance_counts(
+    counts: List[int],
+    weights: Sequence[float],
+    target_total: int,
+    *,
+    n_min: int,
+    n_max: int,
+) -> List[int]:
+    """Adjust rounded counts toward the requested total without changing order."""
+    diff = int(target_total) - sum(counts)
+    if diff == 0:
+        return counts
+    ranked = sorted(range(len(counts)), key=lambda idx: weights[idx], reverse=True)
+    cursor = 0
+    while diff != 0 and ranked:
+        idx = ranked[cursor % len(ranked)]
+        if diff > 0 and counts[idx] < n_max:
+            counts[idx] += 1
+            diff -= 1
+        elif diff < 0 and counts[idx] > n_min:
+            counts[idx] -= 1
+            diff += 1
+        cursor += 1
+        if cursor > len(ranked) * max(20, abs(diff) + 5) and diff != 0:
+            break
+    return counts
+
+
+def _legacy_counts(
+    weights: Sequence[float],
+    *,
+    total_new_samples: int,
+    n_min: int,
+    n_max: int,
+) -> List[int]:
+    total_weight = sum(weights) or 1.0
+    raw_nums: List[int] = []
+    for weight in weights:
+        num = n_min + ((total_new_samples - len(weights) * n_min) * weight / total_weight)
+        num = round(num)
+        num = max(n_min, min(int(num), n_max))
+        raw_nums.append(num)
+    return _rebalance_counts(
+        raw_nums,
+        weights,
+        total_new_samples,
+        n_min=n_min,
+        n_max=n_max,
+    )
+
+
+def _marginal_score(
+    value: float,
+    count: int,
+    *,
+    alpha: float,
+) -> float:
+    return value / ((max(0, count) + 1) ** max(0.0, alpha))
+
+
+def _threshold_marginal_counts(
+    weights: Sequence[float],
+    *,
+    total_new_samples: int,
+    n_max: int,
+    active_threshold: int,
+    marginal_alpha: float,
+    threshold_boost: float,
+    cold_start_factor: float,
+) -> List[int]:
+    """Allocate budget into dense seed clusters with diminishing returns.
+
+    The first pass estimates each seed's natural budget in ``0..n_max``.
+    Counts below ``active_threshold`` are not kept directly; their budget is
+    pooled. Borderline seeds can be reactivated when their value and closeness
+    to the threshold justify the full activation cost. Remaining budget goes to
+    activated seeds by a diminishing marginal score, which keeps the allocation
+    concentrated without letting one seed monopolize the budget.
+    """
+    if not weights:
+        return []
+    if total_new_samples <= 0 or n_max <= 0:
+        return [0 for _ in weights]
+    threshold = max(1, min(int(active_threshold), int(n_max)))
+    initial = _legacy_counts(
+        weights,
+        total_new_samples=total_new_samples,
+        n_min=0,
+        n_max=n_max,
+    )
+    counts = [0 for _ in initial]
+    pool = 0
+    active: List[int] = []
+    candidates: List[tuple[float, int]] = []
+
+    for idx, count in enumerate(initial):
+        value = max(0.0, float(weights[idx]))
+        if count >= threshold:
+            counts[idx] = count
+            active.append(idx)
+            continue
+        pool += count
+        if count > 0:
+            gap = threshold - count
+            score = (
+                value
+                * max(0.0, threshold_boost)
+                / max(1, gap)
+                / ((count + 1) ** max(0.0, marginal_alpha))
+            )
+            candidates.append((score, idx))
+        elif cold_start_factor > 0:
+            score = value * cold_start_factor / (threshold ** max(0.0, marginal_alpha))
+            candidates.append((score, idx))
+
+    candidates.sort(key=lambda item: (item[0], weights[item[1]]), reverse=True)
+
+    def best_active_score() -> float:
+        best = 0.0
+        for idx in active:
+            if counts[idx] < n_max:
+                best = max(
+                    best,
+                    _marginal_score(
+                        max(0.0, float(weights[idx])),
+                        counts[idx],
+                        alpha=marginal_alpha,
+                    ),
+                )
+        return best
+
+    for activation_score, idx in candidates:
+        if pool < threshold:
+            break
+        if counts[idx] > 0:
+            continue
+        if active and activation_score < best_active_score():
+            break
+        counts[idx] = threshold
+        active.append(idx)
+        pool -= threshold
+
+    while pool > 0 and active:
+        best_idx = -1
+        best_score = -1.0
+        for idx in active:
+            if counts[idx] >= n_max:
+                continue
+            score = _marginal_score(
+                max(0.0, float(weights[idx])),
+                counts[idx],
+                alpha=marginal_alpha,
+            )
+            if score > best_score:
+                best_idx = idx
+                best_score = score
+        if best_idx < 0:
+            break
+        counts[best_idx] += 1
+        pool -= 1
+
+    return counts
+
+
 def distribute_mastery_records(
     mastery_records: Sequence[Dict[str, Any]],
     source_lookup: Dict[Any, Dict[str, Any]],
@@ -76,6 +240,11 @@ def distribute_mastery_records(
     n_min: int = 10,
     n_max: int = 50,
     lambda_balance: float = 0.3,
+    allocation_policy: str = "legacy",
+    active_threshold: int = 0,
+    marginal_alpha: float = 0.7,
+    threshold_boost: float = 2.0,
+    cold_start_factor: float = 0.0,
 ) -> List[Dict[str, Any]]:
     """Attach synthesis count and relative difficulty to each mastery record."""
     if not mastery_records:
@@ -104,28 +273,26 @@ def distribute_mastery_records(
     total_target = max(len(records), int(target_multiplier * len(records)))
     total_new_samples = max(0, total_target - len(records))
 
-    raw_nums: List[int] = []
-    for weight in weights:
-        num = n_min + ((total_new_samples - len(records) * n_min) * weight / total_weight)
-        num = round(num)
-        num = max(n_min, min(int(num), n_max))
-        raw_nums.append(num)
-
-    diff = total_new_samples - sum(raw_nums)
-    if diff != 0:
-        ranked = sorted(range(len(records)), key=lambda idx: weights[idx], reverse=True)
-        cursor = 0
-        while diff != 0 and ranked:
-            idx = ranked[cursor % len(ranked)]
-            if diff > 0 and raw_nums[idx] < n_max:
-                raw_nums[idx] += 1
-                diff -= 1
-            elif diff < 0 and raw_nums[idx] > n_min:
-                raw_nums[idx] -= 1
-                diff += 1
-            cursor += 1
-            if cursor > len(ranked) * 20 and diff != 0:
-                break
+    policy = str(allocation_policy or "legacy").strip().lower()
+    if policy in {"legacy", "default"}:
+        raw_nums = _legacy_counts(
+            weights,
+            total_new_samples=total_new_samples,
+            n_min=n_min,
+            n_max=n_max,
+        )
+    elif policy in {"threshold_marginal", "threshold-redistribute", "threshold_redistribute"}:
+        raw_nums = _threshold_marginal_counts(
+            weights,
+            total_new_samples=total_new_samples,
+            n_max=n_max,
+            active_threshold=active_threshold,
+            marginal_alpha=marginal_alpha,
+            threshold_boost=threshold_boost,
+            cold_start_factor=cold_start_factor,
+        )
+    else:
+        raise ValueError(f"Unsupported synthesis allocation policy: {allocation_policy}")
 
     for item, mastery, num, weight in zip(records, profs, raw_nums, weights):
         difficulty = difficulty_from_mastery(mastery)
@@ -133,5 +300,9 @@ def distribute_mastery_records(
         item["target_difficulty"] = difficulty
         item["target_difficulty_bucket"] = DIFFICULTY_TO_BUCKET[difficulty]
         item["target_step_count_range"] = DIFFICULTY_STEP_RANGES[difficulty]
+        item["allocation_policy"] = policy
+        if policy != "legacy":
+            item["allocation_weight"] = round(float(weight), 8)
+            item["active_threshold"] = int(max(0, active_threshold))
 
     return records

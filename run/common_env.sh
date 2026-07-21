@@ -86,3 +86,23 @@ resolve_pipeline_python() {
   fi
   command -v python
 }
+
+resolve_vllm_api_port() {
+  local configured="${VLLM_API_PORT:-${VLLM_PORT:-}}"
+  if [[ -n "${configured}" ]]; then
+    printf '%s\n' "${configured}"
+    return 0
+  fi
+
+  local base_url="${VLLM_BASE_URL:-}"
+  if [[ -z "${base_url}" ]]; then
+    return 1
+  fi
+  local parsed
+  parsed="$(printf '%s\n' "${base_url}" | sed -n 's#^[^:]*://[^/:]*:\([0-9][0-9]*\).*#\1#p' | head -n 1)"
+  if [[ -n "${parsed}" ]]; then
+    printf '%s\n' "${parsed}"
+    return 0
+  fi
+  return 1
+}

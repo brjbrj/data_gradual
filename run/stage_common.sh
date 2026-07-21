@@ -236,7 +236,8 @@ stage_ensure_vllm() {
   if [[ "${mode}" == "managed" ]]; then
     local pid_file="${VLLM_PID_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.pid}"
     local log_file="${VLLM_LOG_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.log}"
-    local api_port="${VLLM_API_PORT:-${VLLM_PORT:-}}"
+    local api_port
+    api_port="$(resolve_vllm_api_port || true)"
     if stage_check_served_model "${expected}"; then
       stage_log "reusing managed vLLM for ${label}: ${expected}"
       return 0
@@ -293,8 +294,10 @@ stage_require_file() {
 stage_cleanup_managed_vllm() {
   if [[ -n "${STAGE_MANAGED_PID_FILE:-}" ]]; then
     STOP_ARGS=(--pid-file "${STAGE_MANAGED_PID_FILE}")
-    if [[ -n "${VLLM_API_PORT:-${VLLM_PORT:-}}" ]]; then
-      STOP_ARGS+=(--port "${VLLM_API_PORT:-${VLLM_PORT:-}}")
+    local api_port
+    api_port="$(resolve_vllm_api_port || true)"
+    if [[ -n "${api_port}" ]]; then
+      STOP_ARGS+=(--port "${api_port}")
     fi
     bash "${STAGE_ROOT_DIR}/run/stop_vllm.sh" "${STOP_ARGS[@]}" >/dev/null 2>&1 || true
   fi

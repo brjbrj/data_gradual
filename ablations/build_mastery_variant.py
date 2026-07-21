@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -212,6 +213,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--synthesis-min-per-seed", type=int, default=10)
     parser.add_argument("--synthesis-max-per-seed", type=int, default=50)
     parser.add_argument("--synthesis-balance-lambda", type=float, default=0.3)
+    parser.add_argument("--synthesis-allocation-policy", default=None)
+    parser.add_argument("--synthesis-active-threshold", type=int, default=None)
+    parser.add_argument("--synthesis-marginal-alpha", type=float, default=None)
+    parser.add_argument("--synthesis-threshold-boost", type=float, default=None)
+    parser.add_argument("--synthesis-cold-start-factor", type=float, default=None)
     args = parser.parse_args(argv)
 
     seed_records = read_jsonl(Path(args.seed_input))
@@ -228,6 +234,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             n_min=args.synthesis_min_per_seed,
             n_max=args.synthesis_max_per_seed,
             lambda_balance=args.synthesis_balance_lambda,
+            allocation_policy=args.synthesis_allocation_policy or os.environ.get("SYNTHESIS_ALLOCATION_POLICY", "legacy"),
+            active_threshold=args.synthesis_active_threshold if args.synthesis_active_threshold is not None else int(os.environ.get("SYNTHESIS_ACTIVE_THRESHOLD", "0") or 0),
+            marginal_alpha=args.synthesis_marginal_alpha if args.synthesis_marginal_alpha is not None else float(os.environ.get("SYNTHESIS_MARGINAL_ALPHA", "0.7") or 0.7),
+            threshold_boost=args.synthesis_threshold_boost if args.synthesis_threshold_boost is not None else float(os.environ.get("SYNTHESIS_THRESHOLD_BOOST", "2.0") or 2.0),
+            cold_start_factor=args.synthesis_cold_start_factor if args.synthesis_cold_start_factor is not None else float(os.environ.get("SYNTHESIS_COLD_START_FACTOR", "0.0") or 0.0),
         )
         outputs = [
             {

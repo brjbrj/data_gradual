@@ -50,7 +50,7 @@ HOST="${VLLM_HOST-0.0.0.0}"
 # VLLM_PORT is also consumed internally by older vLLM releases. Prefer the
 # project-specific name while retaining the old setting as a compatibility
 # fallback, then remove both variables before launching the server.
-PORT="${VLLM_API_PORT:-${VLLM_PORT:-8911}}"
+PORT="$(resolve_vllm_api_port || printf '8911')"
 TP="${VLLM_TP:-2}"
 MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN-8192}"
 GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION-0.90}"
@@ -264,7 +264,7 @@ unset VLLM_PID_FILE VLLM_MODEL_FILE
 unset VLLM_PYTHON_FILE
 
 if [[ -f "${PID_FILE}" ]]; then
-  bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}"
+  bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}" --port "${PORT}"
 elif ps -eo pid=,args= | awk -v port="${PORT}" '
   /[v]llm\.entrypoints\.openai\.api_server/ {
     for (i = 1; i <= NF; i++) {
@@ -337,7 +337,7 @@ if is_enabled "${FOREGROUND_LOG}"; then
     local status="${1:-$?}"
     trap - INT TERM EXIT
     kill "${TAIL_PID}" >/dev/null 2>&1 || true
-    bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}" >/dev/null 2>&1 || true
+    bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}" --port "${PORT}" >/dev/null 2>&1 || true
     exit "${status}"
   }
 
@@ -349,7 +349,7 @@ if is_enabled "${FOREGROUND_LOG}"; then
   STATUS=$?
   trap - INT TERM EXIT
   kill "${TAIL_PID}" >/dev/null 2>&1 || true
-  bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}" >/dev/null 2>&1 || true
+  bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}" --port "${PORT}" >/dev/null 2>&1 || true
   set -e
   exit "${STATUS}"
 fi
