@@ -16,6 +16,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 NUMBER_RE = re.compile(r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?")
 BOXED_RE = re.compile(r"\\boxed\{([^{}]+)\}")
 FINAL_MARK_RE = re.compile(r"####\s*(.+)$")
+CHOICE_RE = re.compile(r"\b([A-E])\b")
 
 
 class OpenAICompatibleClient:
@@ -185,6 +186,41 @@ def extract_answer_and_steps_from_gsm8k(answer_text: str) -> Tuple[str, str]:
     return answer_value, steps_text
 
 
+def normalize_choice_token(text: Any) -> str:
+    match = re.search(r"\b([A-E])\b", str(text or ""), flags=re.IGNORECASE)
+    return match.group(1).upper() if match else normalize_whitespace(text).upper()
+
+
+def format_options(options: Any) -> str:
+    if isinstance(options, list):
+        items = [str(item).strip() for item in options if str(item).strip()]
+    else:
+        items = [str(options or "").strip()] if str(options or "").strip() else []
+    return "[" + ", ".join(items) + "]"
+
+
+def prepare_agieval_eng_qa_record(record: Dict[str, Any], index: int) -> Dict[str, Any]:
+    question = str(record.get("question", "") or "").strip()
+    options_text = format_options(record.get("options"))
+    if options_text != "[]":
+        question = (
+            f"{question} Choose the correct option from the given choices. "
+            f"The options are as follows:{options_text}"
+        )
+    rationale = re.sub(
+        r"^\s*Explanation\s*:\s*",
+        "",
+        str(record.get("rationale", record.get("solution_steps", "")) or "").strip(),
+        flags=re.IGNORECASE,
+    )
+    return {
+        "task_id": record.get("task_id", index),
+        "question": question,
+        "answer": normalize_choice_token(record.get("correct", record.get("answer", ""))),
+        "solution_steps": rationale,
+    }
+
+
 def is_prepared_record(record: Dict[str, Any]) -> bool:
     for field in ("task_id", "question", "answer"):
         if field not in record or normalize_whitespace(record.get(field)) == "":
@@ -199,6 +235,8 @@ def prepare_record(record: Dict[str, Any], index: int, *, format_template: str) 
         prepared.setdefault("task_id", index)
         prepared.setdefault("solution_steps", "")
         return prepared
+    if template == "agieval_eng_qa":
+        return prepare_agieval_eng_qa_record(record, index)
     if template in {"auto", "gsm8k"}:
         answer, solution_steps = extract_answer_and_steps_from_gsm8k(str(record.get("answer", "")))
         return {
@@ -257,14 +295,29 @@ def build_messages(prompt_text: str, question: str, *, prompt_mode: str, attempt
     ]
 
 
-def extract_final_answer(text: str) -> str:
+def extract_final_answer(text: str, *, answer_extract_mode: str = "number") -> str:
     raw = str(text or "")
     boxed = BOXED_RE.findall(raw)
     if boxed:
-        return normalize_whitespace(boxed[-1])
+        extracted = normalize_whitespace(boxed[-1])
+        return normalize_choice_token(extracted) if answer_extract_mode == "choice" else extracted
     mark = FINAL_MARK_RE.search(raw)
     if mark:
-        return normalize_whitespace(mark.group(1))
+        extracted = normalize_whitespace(mark.group(1))
+        return normalize_choice_token(extracted) if answer_extract_mode == "choice" else extracted
+    if answer_extract_mode == "choice":
+        answer_match = re.search(
+            r"(?:the\s+answer\s+is|answer)\s*[:：]?\s*(?:\$?\\boxed\{)?\s*([A-E])\b",
+            raw,
+            flags=re.IGNORECASE,
+        )
+        if answer_match:
+            return answer_match.group(1).upper()
+        choices = CHOICE_RE.findall(raw)
+        if choices:
+            return choices[-1].upper()
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
+        return normalize_choice_token(lines[-1] if lines else raw)
     numbers = NUMBER_RE.findall(raw.replace(",", ""))
     if numbers:
         return normalize_whitespace(numbers[-1])
@@ -301,9 +354,11 @@ def normalize_number_token(text: str) -> str:
     return cleaned
 
 
-def is_correct_answer(candidate: str, reference: str) -> bool:
+def is_correct_answer(candidate: str, reference: str, *, answer_extract_mode: str = "number") -> bool:
     if not candidate or not reference:
         return False
+    if answer_extract_mode == "choice":
+        return normalize_choice_token(candidate) == normalize_choice_token(reference)
     cand = normalize_number_token(candidate)
     ref = normalize_number_token(reference)
     if not cand or not ref:
@@ -329,6 +384,7 @@ def answer_records(
     seed_base: Optional[int],
     prompt_mode: str,
     attempt_variation: bool,
+    answer_extract_mode: str,
     existing_predictions: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     expected_keys = {
@@ -370,7 +426,7 @@ def answer_records(
             frequency_penalty=frequency_penalty,
             seed=seed,
         )
-        extracted = extract_final_answer(raw)
+        extracted = extract_final_answer(raw, answer_extract_mode=answer_extract_mode)
         model_solution_steps = extract_solution_steps(raw)
         return {
             "task_id": record.get("task_id"),
@@ -381,9 +437,10 @@ def answer_records(
             "solution_steps": model_solution_steps,
             "raw_output": raw,
             "extracted_answer": extracted,
-            "is_correct": is_correct_answer(extracted, reference),
+            "is_correct": is_correct_answer(extracted, reference, answer_extract_mode=answer_extract_mode),
             "request_visible_fields": ["question"],
             "prompt_mode": prompt_mode,
+            "answer_extract_mode": answer_extract_mode,
             "seed": seed,
         }
 
@@ -514,6 +571,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--frequency-penalty", type=float, default=0.0)
     parser.add_argument("--seed-base", type=int, default=None)
     parser.add_argument("--prompt-mode", choices=["chat", "legacy_concat"], default="legacy_concat")
+    parser.add_argument("--answer-extract-mode", choices=["number", "choice"], default=os.environ.get("EVAL_ANSWER_EXTRACT_MODE", "number"))
     parser.add_argument("--attempt-variation", action="store_true")
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--max-retries", type=int, default=2)
@@ -558,6 +616,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         seed_base=args.seed_base,
         prompt_mode=args.prompt_mode,
         attempt_variation=args.attempt_variation,
+        answer_extract_mode=args.answer_extract_mode,
         existing_predictions=existing,
     )
     write_jsonl(predictions_path, predictions)
@@ -581,6 +640,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "frequency_penalty": args.frequency_penalty,
         "seed_base": args.seed_base,
         "prompt_mode": args.prompt_mode,
+        "answer_extract_mode": args.answer_extract_mode,
         "attempt_variation": args.attempt_variation,
         "timeout": args.timeout,
         "max_retries": args.max_retries,

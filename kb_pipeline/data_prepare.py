@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -41,6 +42,46 @@ def gsm8k_format(record: Dict[str, Any], index: int) -> Dict[str, Any]:
     }
 
 
+def _normalize_choice_answer(value: Any) -> str:
+    text = str(value or "").strip()
+    match = re.search(r"\b([A-Za-z])\b", text)
+    return match.group(1).upper() if match else text.upper()
+
+
+def _format_options(options: Any) -> str:
+    if isinstance(options, list):
+        items = [str(item).strip() for item in options if str(item).strip()]
+    else:
+        items = [str(options or "").strip()] if str(options or "").strip() else []
+    return "[" + ", ".join(items) + "]"
+
+
+def _clean_agieval_rationale(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"^\s*Explanation\s*:\s*", "", text, flags=re.IGNORECASE)
+    return text.strip()
+
+
+def agieval_eng_qa_format(record: Dict[str, Any], index: int) -> Dict[str, Any]:
+    if not isinstance(record, dict):
+        raise TypeError(f"record must be a JSON object, got {type(record).__name__}")
+    question = str(record.get("question", "") or "").strip()
+    options_text = _format_options(record.get("options"))
+    if options_text != "[]":
+        question = (
+            f"{question} Choose the correct option from the given choices. "
+            f"The options are as follows:{options_text}"
+        )
+    return {
+        "task_id": record.get("task_id", index),
+        "question": question,
+        "answer": _normalize_choice_answer(record.get("correct", record.get("answer", ""))),
+        "solution_steps": _clean_agieval_rationale(record.get("rationale", record.get("solution_steps", ""))),
+        "proficiency_score": record.get("proficiency_score", 0),
+        "question_type": str(record.get("question_type", "") or "").strip(),
+    }
+
+
 def passthrough_format(record: Dict[str, Any], index: int) -> Dict[str, Any]:
     normalized = dict(record)
     normalized.setdefault("task_id", index)
@@ -51,6 +92,7 @@ def passthrough_format(record: Dict[str, Any], index: int) -> Dict[str, Any]:
 
 FORMAT_HANDLERS: Dict[str, FormatHandler] = {
     "gsm8k": gsm8k_format,
+    "agieval_eng_qa": agieval_eng_qa_format,
     "passthrough": passthrough_format,
     "none": passthrough_format,
 }

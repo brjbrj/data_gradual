@@ -61,6 +61,7 @@ ARGS=("${PYTHON_BIN}" "${ROOT_DIR}/evaluation/evaluate_accuracy.py"
   --presence-penalty "${EVAL_PRESENCE_PENALTY:-0.0}"
   --frequency-penalty "${EVAL_FREQUENCY_PENALTY:-0.0}"
   --prompt-mode "${EVAL_PROMPT_MODE:-legacy_concat}"
+  --answer-extract-mode "${EVAL_ANSWER_EXTRACT_MODE:-number}"
   --timeout "${EVAL_TIMEOUT:-600}"
   --max-retries "${EVAL_MAX_RETRIES:--1}"
 )

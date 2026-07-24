@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .utils import normalize_whitespace
@@ -14,7 +16,26 @@ def _allowed_score_values() -> List[float]:
     return [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 
 
+def _load_prompt_content(path: str) -> str:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    content = payload.get("content") if isinstance(payload, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError(f"prompt file must contain non-empty content: {path}")
+    return content.strip()
+
+
 def build_victim_answer_prompt(question: str, attempt_index: int) -> List[Dict[str, str]]:
+    prompt_path = os.environ.get("VICTIM_ANSWER_PROMPT_PATH") or os.environ.get("ANSWER_PROMPT_PATH")
+    if prompt_path:
+        prompt_text = _load_prompt_content(prompt_path)
+        user = (
+            f"{prompt_text}\n\n"
+            f"Question:\n{question}"
+        )
+        if attempt_index > 0:
+            user += f"\n\nThis is independent sample #{attempt_index + 1}. Produce a valid solution without copying earlier samples."
+        return [{"role": "user", "content": user}]
+
     system = (
         "You are a careful mathematical reasoning model being evaluated on problem-solving ability. "
         "You will only see the question, and you must not assume any hidden reference answer. "
