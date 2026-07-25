@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 
 DIFFICULTY_LABELS = [
@@ -96,6 +96,22 @@ def _rebalance_counts(
     return counts
 
 
+def _assert_exact_total(
+    counts: Sequence[int],
+    target_total: int,
+    *,
+    context: str,
+) -> None:
+    actual = sum(int(count) for count in counts)
+    if actual != int(target_total):
+        raise ValueError(
+            f"{context} could not allocate the exact SYNTHESIS_TARGET_COUNT: "
+            f"requested={int(target_total)} actual={actual}. "
+            "Adjust SYNTHESIS_TARGET_COUNT, SYNTHESIS_MIN_PER_SEED, "
+            "SYNTHESIS_MAX_PER_SEED, or SYNTHESIS_ACTIVE_THRESHOLD."
+        )
+
+
 def _legacy_counts(
     weights: Sequence[float],
     *,
@@ -110,13 +126,14 @@ def _legacy_counts(
         num = round(num)
         num = max(n_min, min(int(num), n_max))
         raw_nums.append(num)
-    return _rebalance_counts(
+    counts = _rebalance_counts(
         raw_nums,
         weights,
         total_new_samples,
         n_min=n_min,
         n_max=n_max,
     )
+    return counts
 
 
 def _marginal_score(
@@ -137,6 +154,7 @@ def _threshold_marginal_counts(
     marginal_alpha: float,
     threshold_boost: float,
     cold_start_factor: float,
+    strict_total: bool = False,
 ) -> List[int]:
     """Allocate budget into dense seed clusters with diminishing returns.
 
@@ -229,6 +247,16 @@ def _threshold_marginal_counts(
         counts[best_idx] += 1
         pool -= 1
 
+    if strict_total and pool > 0:
+        inactive = [idx for idx, count in enumerate(counts) if count == 0]
+        inactive.sort(key=lambda idx: weights[idx], reverse=True)
+        for idx in inactive:
+            if pool <= 0:
+                break
+            take = min(pool, n_max)
+            counts[idx] = take
+            pool -= take
+
     return counts
 
 
@@ -237,6 +265,7 @@ def distribute_mastery_records(
     source_lookup: Dict[Any, Dict[str, Any]],
     *,
     target_multiplier: int = 26,
+    target_count: Optional[int] = None,
     n_min: int = 10,
     n_max: int = 50,
     lambda_balance: float = 0.3,
@@ -270,10 +299,29 @@ def distribute_mastery_records(
         weights.append(weight)
 
     total_weight = sum(weights) or 1.0
-    total_target = max(len(records), int(target_multiplier * len(records)))
-    total_new_samples = max(0, total_target - len(records))
+    if target_count is not None:
+        total_new_samples = max(0, int(target_count))
+        allocation_budget_mode = "target_count"
+    else:
+        total_target = max(len(records), int(target_multiplier * len(records)))
+        total_new_samples = max(0, total_target - len(records))
+        allocation_budget_mode = "target_multiplier"
 
     policy = str(allocation_policy or "legacy").strip().lower()
+    if target_count is not None:
+        if total_new_samples > len(records) * max(0, int(n_max)):
+            raise ValueError(
+                "SYNTHESIS_TARGET_COUNT exceeds the maximum feasible allocation: "
+                f"requested={total_new_samples} max_feasible={len(records) * max(0, int(n_max))} "
+                f"with seed_count={len(records)} and SYNTHESIS_MAX_PER_SEED={n_max}."
+            )
+        if policy in {"legacy", "default"} and total_new_samples < len(records) * max(0, int(n_min)):
+            raise ValueError(
+                "SYNTHESIS_TARGET_COUNT is below the minimum feasible legacy allocation: "
+                f"requested={total_new_samples} min_feasible={len(records) * max(0, int(n_min))} "
+                f"with seed_count={len(records)} and SYNTHESIS_MIN_PER_SEED={n_min}. "
+                "Use SYNTHESIS_MIN_PER_SEED=0 or threshold_marginal for sparse allocation."
+            )
     if policy in {"legacy", "default"}:
         raw_nums = _legacy_counts(
             weights,
@@ -290,9 +338,16 @@ def distribute_mastery_records(
             marginal_alpha=marginal_alpha,
             threshold_boost=threshold_boost,
             cold_start_factor=cold_start_factor,
+            strict_total=target_count is not None,
         )
     else:
         raise ValueError(f"Unsupported synthesis allocation policy: {allocation_policy}")
+    if target_count is not None:
+        _assert_exact_total(
+            raw_nums,
+            total_new_samples,
+            context=f"allocation_policy={policy}",
+        )
 
     for item, mastery, num, weight in zip(records, profs, raw_nums, weights):
         difficulty = difficulty_from_mastery(mastery)
@@ -301,6 +356,9 @@ def distribute_mastery_records(
         item["target_difficulty_bucket"] = DIFFICULTY_TO_BUCKET[difficulty]
         item["target_step_count_range"] = DIFFICULTY_STEP_RANGES[difficulty]
         item["allocation_policy"] = policy
+        item["allocation_budget_mode"] = allocation_budget_mode
+        if target_count is not None:
+            item["synthesis_target_count"] = int(target_count)
         if policy != "legacy":
             item["allocation_weight"] = round(float(weight), 8)
             item["active_threshold"] = int(max(0, active_threshold))

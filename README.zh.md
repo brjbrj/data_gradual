@@ -1,4 +1,4 @@
-# data_gradual_new
+﻿# data_gradual_new
 
 这是一个独立的渐进式数学数据合成项目。项目保留了原始的 mastery 计算、合成数量分配和相对难度分配逻辑，并在当前目录中实现了后续的计划构建、题目生成、盲解验证、定向修复和训练数据导出流程。
 
@@ -327,8 +327,24 @@ REFINE_CHECKPOINT_EVERY=50
 
 ```bash
 SYNTHESIS_ALLOCATION_POLICY=legacy
+SYNTHESIS_TARGET_COUNT=
 SYNTHESIS_MIN_PER_SEED=10
 SYNTHESIS_MAX_PER_SEED=50
+```
+
+默认使用 `SYNTHESIS_TARGET_MULTIPLIER` 按数据集规模计算合成总量。对于很大的数据集，可以改用绝对合成额度：
+
+```bash
+SYNTHESIS_TARGET_COUNT=30000
+```
+
+设置 `SYNTHESIS_TARGET_COUNT` 后，它会优先于 `SYNTHESIS_TARGET_MULTIPLIER`，含义是所有种子题最终分到的 `target_count` 总和必须严格等于这个值。`SYNTHESIS_MIN_PER_SEED` 和 `SYNTHESIS_MAX_PER_SEED` 仍然是硬约束；不可行的配置会提前报错，而不是静默少分。旧方案里如果 `SYNTHESIS_MIN_PER_SEED=10` 且种子题很多，总额度不能低于这个最低分配带来的下限。大数据集更推荐配合门槛方案使用：
+
+```bash
+SYNTHESIS_TARGET_COUNT=30000
+SYNTHESIS_MIN_PER_SEED=0
+SYNTHESIS_ALLOCATION_POLICY=threshold_marginal
+SYNTHESIS_ACTIVE_THRESHOLD=10
 ```
 
 如果希望把预算集中到更有价值、能形成足够厚训练簇的种子题上，可以开启门槛-边际收益分配：
@@ -343,7 +359,7 @@ SYNTHESIS_THRESHOLD_BOOST=2.0
 SYNTHESIS_COLD_START_FACTOR=0.0
 ```
 
-该策略第一轮仍按原始训练价值估计每题 `0..SYNTHESIS_MAX_PER_SEED` 的预算；低于 `SYNTHESIS_ACTIVE_THRESHOLD` 的题不会直接保留，而是进入回收池。系统会根据“训练价值”和“距离门槛的接近程度”决定是否激活这些题；剩余预算再按边际收益递减分给已激活题目，使高价值题获得更厚的局部扩展，同时避免单个题持续垄断预算。
+该策略第一轮仍按原始训练价值估计每题 `0..SYNTHESIS_MAX_PER_SEED` 的预算；低于 `SYNTHESIS_ACTIVE_THRESHOLD` 的题不会直接保留，而是进入回收池。系统会根据“训练价值”和“距离门槛的接近程度”决定是否激活这些题；剩余预算再按边际收益递减分给已激活题目，使高价值题获得更厚的局部扩展，同时避免单个题持续垄断预算。如果设置了绝对额度且最后剩余预算小于激活门槛，系统仍会把这部分零头分给剩余价值最高的题，以保证总量严格等于 `SYNTHESIS_TARGET_COUNT`。
 
 ## vLLM / NCCL 配置说明
 

@@ -261,14 +261,30 @@ The original allocation remains the default:
 
 ```bash
 SYNTHESIS_ALLOCATION_POLICY=legacy
+SYNTHESIS_TARGET_COUNT=
 SYNTHESIS_MIN_PER_SEED=10
 SYNTHESIS_MAX_PER_SEED=50
 ```
+
+By default, `SYNTHESIS_TARGET_MULTIPLIER` computes the synthesis budget from
+the number of seed questions. For large datasets, set an absolute budget:
+
+```bash
+SYNTHESIS_TARGET_COUNT=30000
+```
+
+When `SYNTHESIS_TARGET_COUNT` is non-empty, it takes precedence over
+`SYNTHESIS_TARGET_MULTIPLIER` and means the sum of all `target_count` values
+must exactly match that generated-sample budget. `SYNTHESIS_MIN_PER_SEED` and
+`SYNTHESIS_MAX_PER_SEED` still apply as hard bounds; impossible configurations
+fail early with a clear error instead of silently allocating fewer samples.
+Very low absolute budgets should usually be paired with `SYNTHESIS_MIN_PER_SEED=0`.
 
 To concentrate budget on seeds that can form a useful local training cluster,
 enable the threshold-marginal policy:
 
 ```bash
+SYNTHESIS_TARGET_COUNT=30000
 SYNTHESIS_ALLOCATION_POLICY=threshold_marginal
 SYNTHESIS_MIN_PER_SEED=0
 SYNTHESIS_MAX_PER_SEED=50
@@ -282,7 +298,10 @@ This policy first estimates a `0..SYNTHESIS_MAX_PER_SEED` budget per seed.
 Seeds below `SYNTHESIS_ACTIVE_THRESHOLD` are pooled unless their value and
 closeness to the threshold justify activation. Remaining budget is assigned to
 activated seeds by a diminishing marginal score, so high-value seeds receive
-more samples but become less likely to monopolize later allocations.
+more samples but become less likely to monopolize later allocations. When an
+absolute `SYNTHESIS_TARGET_COUNT` leaves a small remainder below the active
+threshold, the remainder is still assigned to the best remaining seed so the
+total budget stays exact.
 
 ### Moving to another machine
 

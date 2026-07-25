@@ -74,6 +74,59 @@ class DistributeMasteryRecordsTests(unittest.TestCase):
             {"threshold_marginal"},
         )
 
+    def test_target_count_overrides_multiplier_when_feasible(self):
+        outputs = distribute_mastery_records(
+            _records(20),
+            _sources(20),
+            target_multiplier=100,
+            target_count=37,
+            n_min=0,
+            n_max=10,
+            allocation_policy="threshold_marginal",
+            active_threshold=3,
+        )
+        self.assertEqual(sum(item["target_count"] for item in outputs), 37)
+        self.assertEqual(
+            {item["allocation_budget_mode"] for item in outputs},
+            {"target_count"},
+        )
+
+    def test_target_count_is_exact_with_small_threshold_remainder(self):
+        outputs = distribute_mastery_records(
+            _records(10),
+            _sources(10),
+            target_multiplier=100,
+            target_count=13,
+            n_min=0,
+            n_max=10,
+            allocation_policy="threshold_marginal",
+            active_threshold=5,
+        )
+        self.assertEqual(sum(item["target_count"] for item in outputs), 13)
+        self.assertLessEqual(max(item["target_count"] for item in outputs), 10)
+
+    def test_target_count_above_capacity_raises(self):
+        with self.assertRaisesRegex(ValueError, "exceeds the maximum feasible allocation"):
+            distribute_mastery_records(
+                _records(3),
+                _sources(3),
+                target_count=31,
+                n_min=0,
+                n_max=10,
+                allocation_policy="threshold_marginal",
+            )
+
+    def test_legacy_target_count_below_minimum_raises(self):
+        with self.assertRaisesRegex(ValueError, "below the minimum feasible legacy allocation"):
+            distribute_mastery_records(
+                _records(5),
+                _sources(5),
+                target_count=7,
+                n_min=2,
+                n_max=10,
+                allocation_policy="legacy",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
