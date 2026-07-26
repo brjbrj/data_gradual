@@ -205,11 +205,18 @@ CLASSIFY_MAX_RETRIES=-1
 CLASSIFY_RETRY_LOG_EVERY=10
 CLASSIFY_RETRY_LOG_SAMPLE_CHARS=240
 CLASSIFY_CHECKPOINT_EVERY=1000
+CLASSIFY_TIMEOUT=120
+CLASSIFY_REQUEST_MAX_RETRIES=0
+CLASSIFY_HEARTBEAT_INTERVAL=60
 ```
 
 `CLASSIFY_CHECKPOINT_EVERY` periodically writes completed classifications to
 the prepared JSONL. If an infinite-retry run is interrupted, rerunning the same
 prepare command skips records that already have `question_type`.
+`CLASSIFY_TIMEOUT` is a classification-specific HTTP timeout; the outer
+classifier owns retry policy, so `CLASSIFY_REQUEST_MAX_RETRIES=0` keeps retries
+visible in prepare logs. `CLASSIFY_HEARTBEAT_INTERVAL` prints in-flight task
+ids when no records finish for a while.
 
 ## Validation configuration
 
