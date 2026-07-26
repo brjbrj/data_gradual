@@ -211,6 +211,25 @@ bash evaluation/run_model_eval.sh gsm8k_2
 EVAL_N_ANSWERS=5 EVAL_TEMPERATURE=0.7 EVAL_TOP_P=0.95 bash evaluation/run_model_eval.sh gsm8k_2
 ```
 
+答案抽取模式目前是显式枚举的：
+
+| 变量 | 可选值 | 适用场景 |
+| --- | --- | --- |
+| `EVAL_ANSWER_EXTRACT_MODE=number` | `number` | GSM8K 这类数值答案数据集。优先抽取 boxed/`####` 标记答案，否则抽取最后一个数字；比较时会忽略逗号、空格、`$`、`%`，再用浮点容差判断。 |
+| `EVAL_ANSWER_EXTRACT_MODE=choice` | `choice` | `agieval_eng_qa` 这类选择题数据集。抽取并归一化 `A`-`E` 选项，小写输出也会转成大写。 |
+
+主流程 answer 阶段对应的变量是 `ANSWER_EXTRACT_MODE`，可选值相同。例如：
+
+```bash
+# GSM8K 数值答案
+EVAL_ANSWER_EXTRACT_MODE=number
+ANSWER_EXTRACT_MODE=number
+
+# AGIEval 选择题答案
+EVAL_ANSWER_EXTRACT_MODE=choice
+ANSWER_EXTRACT_MODE=choice
+```
+
 前置数据处理里的分类也支持 `CLASSIFY_MAX_RETRIES=-1` 无限重试。如果模型输出不在预设类别中，分类器会带着允许类别列表要求模型重新分类。为了避免最后少量样本看起来像“卡住”，可以用 `CLASSIFY_RETRY_LOG_EVERY` 让程序定期打印正在重试的 `task_id`、重试次数、失败原因和最近一次模型输出摘要；设为 `0` 可以关闭逐题重试日志。
 
 ```bash
@@ -221,10 +240,20 @@ CLASSIFY_CHECKPOINT_EVERY=1000
 CLASSIFY_TIMEOUT=120
 CLASSIFY_REQUEST_MAX_RETRIES=0
 CLASSIFY_HEARTBEAT_INTERVAL=60
+PREPARE_FILTER_QUESTION_TYPES=Other / Non-Mathematical
+EVAL_FILTER_QUESTION_TYPES=Other / Non-Mathematical
 ```
 
 `CLASSIFY_CHECKPOINT_EVERY` 会定期把已经完成的分类写入 prepared JSONL。如果无限重试任务被中断，重新执行同一个 prepare 命令时，已有 `question_type` 的记录会自动跳过。
 `CLASSIFY_TIMEOUT` 是分类专用的 HTTP 超时，避免单个 vLLM 请求在内部等太久；`CLASSIFY_REQUEST_MAX_RETRIES=0` 表示不让底层客户端悄悄重试，而是把重试交给外层分类逻辑，这样日志可见。`CLASSIFY_HEARTBEAT_INTERVAL` 会在长时间没有新样本完成时打印仍在请求中的 task。
+
+默认分类提示词现在包含 `Other / Non-Mathematical`，用于承接非数学选择题。`PREPARE_FILTER_QUESTION_TYPES` 会把这些记录从 prepared 主数据中移除，并额外写入：
+
+```text
+outputs/prepared/<dataset>/<dataset>.filtered.jsonl
+```
+
+评测脚本也支持 `EVAL_FILTER_QUESTION_TYPES`，但前提是评测输入记录里已经有 `question_type`。如果评测直接读取没有 `question_type` 的原始验证集，需要先跑 prepare，再用 prepared JSONL 作为评测输入，才能按类别过滤。
 
 ## 主要配置文件
 
