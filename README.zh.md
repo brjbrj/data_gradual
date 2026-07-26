@@ -346,7 +346,7 @@ RUN_STEP_REFINEMENT=1
 REFINE_CONCURRENCY=128
 REFINE_MAX_ROUNDS=-1
 REFINE_MAX_TOKENS=900
-REFINE_FORCE_REWRITE=1
+REFINE_FORCE_REWRITE=0
 REFINE_CHECKPOINT_EVERY=50
 ```
 
@@ -361,7 +361,7 @@ REFINE_CHECKPOINT_EVERY=50
 - `QC_DIFFICULTY_TOLERANCE=1` 表示允许相邻难度档位通过，避免审计模型对难度边界判断过严导致反复修复。
 - `QC_REQUIRE_EXACT_DIFFICULTY=1` 时才恢复严格难度匹配。
 - `RUN_STEP_REFINEMENT=1` 时，全流程会在验证后运行步骤改写阶段。
-- `REFINE_*` 参数控制步骤改写阶段的并发、最大轮数、token 和 checkpoint；`REFINE_MAX_ROUNDS=-1` 表示无限重试。`REFINE_FORCE_REWRITE=1` 会从 validated 输入重新改写步骤，而不是因为旧步骤看起来合格就本地跳过。
+- `REFINE_*` 参数控制步骤改写阶段的并发、最大轮数、token 和 checkpoint；`REFINE_MAX_ROUNDS=-1` 表示无限重试。`REFINE_FORCE_REWRITE=0` 时，已有步骤通过本地质量规则的样本会跳过，只重写未通过的样本。
 - 被拒绝的样本不会直接进入训练数据，而是进入已有的重新生成、修复或 replan 流程。
 
 ### 合成数量分配策略
@@ -567,7 +567,7 @@ outputs/pipeline/<dataset>/refine.rounds/
 
 `refine.rounds/` 会保存每一轮的 `input`、`success`、`raw`、`failed` 和 `summary` 文件，便于像 generate/validation 一样按轮次排查。
 
-该阶段只替换 `steps` 字段，其余字段原样保留。默认会从 validated 输入重新改写步骤，并要求每一步先结合题目信息或上一步得到的量说明逻辑，再给出需要进行的计算；类似 `First, calculate...` 这种先下命令再解释的模板化写法会被拒绝并重试。若手动中断，重新运行会从 `refined.jsonl` 继续。
+该阶段只替换 `steps` 字段，其余字段原样保留。默认只重写未通过本地步骤质量规则的样本，已有步骤合格的样本会直接保留。改写时会要求每一步先结合题目信息或上一步得到的量说明逻辑，再给出需要进行的计算；大量类似 `First, calculate...` 这种先下命令再解释的模板化写法会被拒绝并重试。若手动中断，重新运行会从 `refined.jsonl` 继续。
 
 如果已经有旧的 `refined.jsonl`，但想只重跑 refine 而不重跑前面阶段，可以执行：
 
