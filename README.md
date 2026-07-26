@@ -291,7 +291,7 @@ Edit `config/pipeline.env`.
 | `REFINE_CONCURRENCY` | `128` | Concurrent step-refinement requests |
 | `REFINE_MAX_ROUNDS` | `-1` | Retry rounds for failed step refinements; `-1` means unlimited |
 | `REFINE_MAX_TOKENS` | `900` | Maximum output tokens for step refinement |
-| `REFINE_FORCE_REWRITE` | `1` | Rewrite validated input steps instead of locally accepting existing wording |
+| `REFINE_FORCE_REWRITE` | `0` | Rewrite only records whose existing steps fail local wording-quality rules |
 | `REFINE_CHECKPOINT_EVERY` | `50` | Save refined output every N completed records |
 | `RUN_DATA_PREPARE` | `1` | Enable data preparation in the full pipeline; set `0` to bypass |
 | `DATA_FORMAT_TEMPLATE` | `gsm8k` | Raw-data format adapter, such as `gsm8k` or `passthrough` |
@@ -560,10 +560,12 @@ To force a fresh rewrite from `validated.jsonl` even when an older
 REFINE_FORCE=1 bash run/07_refine_solution_steps.sh gsm8k
 ```
 
-The refinement prompt requires each step to first ground the reasoning in the
-problem information or a previously derived quantity, then state the needed
-calculation. Command-first wording such as `First, calculate...` is rejected
-and retried.
+By default, refinement locally accepts records whose existing steps already
+pass wording-quality rules and rewrites only failed records. The refinement
+prompt asks the model to first ground each step in problem information or a
+previously derived quantity, then state the needed calculation. Strongly
+formulaic command-first wording such as repeated `First, calculate...` is
+rejected and retried.
 
 Outputs:
 
