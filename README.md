@@ -193,6 +193,26 @@ include `pass@1 ... pass@k`.
 EVAL_N_ANSWERS=5 EVAL_TEMPERATURE=0.7 EVAL_TOP_P=0.95 bash evaluation/run_model_eval.sh gsm8k_2
 ```
 
+Answer extraction modes are explicit:
+
+| Variable | Values | Use case |
+| --- | --- | --- |
+| `EVAL_ANSWER_EXTRACT_MODE=number` | `number` | Numeric-answer datasets such as GSM8K. Extracts the final boxed/marked answer first, otherwise the last numeric token. Numeric comparison ignores commas, spaces, `$`, and `%`, then uses float tolerance. |
+| `EVAL_ANSWER_EXTRACT_MODE=choice` | `choice` | Multiple-choice datasets such as `agieval_eng_qa`. Extracts and normalizes an `A`-`E` option, including lowercase model outputs. |
+
+The main pipeline answer stage uses the parallel variable
+`ANSWER_EXTRACT_MODE` with the same values. For example:
+
+```bash
+# GSM8K-style numeric answers
+EVAL_ANSWER_EXTRACT_MODE=number
+ANSWER_EXTRACT_MODE=number
+
+# AGIEval-style multiple choice answers
+EVAL_ANSWER_EXTRACT_MODE=choice
+ANSWER_EXTRACT_MODE=choice
+```
+
 For data preparation, `CLASSIFY_MAX_RETRIES=-1` makes question classification
 retry indefinitely. If a model returns text outside the configured categories,
 the classifier asks it to choose again from the allowed category list. To make
@@ -208,6 +228,8 @@ CLASSIFY_CHECKPOINT_EVERY=1000
 CLASSIFY_TIMEOUT=120
 CLASSIFY_REQUEST_MAX_RETRIES=0
 CLASSIFY_HEARTBEAT_INTERVAL=60
+PREPARE_FILTER_QUESTION_TYPES=Other / Non-Mathematical
+EVAL_FILTER_QUESTION_TYPES=Other / Non-Mathematical
 ```
 
 `CLASSIFY_CHECKPOINT_EVERY` periodically writes completed classifications to
@@ -217,6 +239,19 @@ prepare command skips records that already have `question_type`.
 classifier owns retry policy, so `CLASSIFY_REQUEST_MAX_RETRIES=0` keeps retries
 visible in prepare logs. `CLASSIFY_HEARTBEAT_INTERVAL` prints in-flight task
 ids when no records finish for a while.
+
+The default classification prompt includes `Other / Non-Mathematical` for
+non-math multiple-choice items. `PREPARE_FILTER_QUESTION_TYPES` removes those
+records from the prepared dataset and writes them to:
+
+```text
+outputs/prepared/<dataset>/<dataset>.filtered.jsonl
+```
+
+The evaluation script also honors `EVAL_FILTER_QUESTION_TYPES` when the
+evaluation input records already contain `question_type`. For raw validation
+sets without `question_type`, run the prepare stage first and evaluate the
+prepared JSONL if you need the same category filtering.
 
 ## Validation configuration
 
