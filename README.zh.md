@@ -300,6 +300,7 @@ QC_MAX_QUESTION_CHARS=700
 QC_MAX_SOLUTION_CHARS=900
 QC_MAX_STEP_COUNT=10
 QC_TEMPLATE_CALCULATE_MAX_STEPS=1
+QC_ENABLE_TRAINING_STYLE_PRECHECK=0
 QC_BLOCK_TRAINING_UNFRIENDLY_SCENES=1
 QC_WARN_OVERUSED_FINAL_ANSWERS=1
 QC_TRAINING_STYLE_HARD_FAIL=0
@@ -312,6 +313,7 @@ RUN_STEP_REFINEMENT=1
 REFINE_CONCURRENCY=128
 REFINE_MAX_ROUNDS=-1
 REFINE_MAX_TOKENS=900
+REFINE_FORCE_REWRITE=1
 REFINE_CHECKPOINT_EVERY=50
 ```
 
@@ -319,15 +321,14 @@ REFINE_CHECKPOINT_EVERY=50
 
 - `PLAN_USE_FULL_SCENE_DOMAINS=0` 时，plan 阶段默认使用更接近 GSM8K 的日常场景池，如学校、购物、家务、运动、食物、金钱、时间、距离和社区活动。
 - `PLAN_USE_FULL_SCENE_DOMAINS=1` 时，恢复完整场景池，允许仓储、实验室、软件、太阳能、水站、机场等技术/工程化场景。
-- `QC_MAX_QUESTION_CHARS`、`QC_MAX_SOLUTION_CHARS`、`QC_MAX_STEP_COUNT` 用于拦截过长、过啰嗦、步骤过多的样本。
-- `QC_TEMPLATE_CALCULATE_MAX_STEPS` 用于拦截大量步骤都以 `Calculate...` 开头的模板化解答。
-- `QC_BLOCK_TRAINING_UNFRIENDLY_SCENES=1` 时，校验预检查会拒绝明显不利于 GSM8K 风格训练的技术化场景。
+- `QC_ENABLE_TRAINING_STYLE_PRECHECK=0` 时，validate 默认只关注数学正确性、答案唯一性、答案正确性和格式/严重失控问题；步骤表达质量交给 refine。
+- `QC_ENABLE_TRAINING_STYLE_PRECHECK=1` 时，`QC_MAX_QUESTION_CHARS`、`QC_MAX_SOLUTION_CHARS`、`QC_MAX_STEP_COUNT`、`QC_TEMPLATE_CALCULATE_MAX_STEPS` 和 `QC_BLOCK_TRAINING_UNFRIENDLY_SCENES` 会恢复为训练风格 warning/硬失败规则。
 - `QC_TRAINING_STYLE_HARD_FAIL=0` 时，训练风格问题只作为 warning 记录，不进入修复循环；这能显著提高每轮 pass 率。
 - `QC_SEVERE_MAX_QUESTION_CHARS`、`QC_SEVERE_MAX_SOLUTION_CHARS`、`QC_SEVERE_MAX_STEP_COUNT` 仍会拦截极端冗长样本，避免完全失控的输出进入训练集。
 - `QC_DIFFICULTY_TOLERANCE=1` 表示允许相邻难度档位通过，避免审计模型对难度边界判断过严导致反复修复。
 - `QC_REQUIRE_EXACT_DIFFICULTY=1` 时才恢复严格难度匹配。
 - `RUN_STEP_REFINEMENT=1` 时，全流程会在验证后运行步骤改写阶段。
-- `REFINE_*` 参数控制步骤改写阶段的并发、最大轮数、token 和 checkpoint；`REFINE_MAX_ROUNDS=-1` 表示无限重试。
+- `REFINE_*` 参数控制步骤改写阶段的并发、最大轮数、token 和 checkpoint；`REFINE_MAX_ROUNDS=-1` 表示无限重试。`REFINE_FORCE_REWRITE=1` 会从 validated 输入重新改写步骤，而不是因为旧步骤看起来合格就本地跳过。
 - 被拒绝的样本不会直接进入训练数据，而是进入已有的重新生成、修复或 replan 流程。
 
 ### 合成数量分配策略
@@ -533,7 +534,13 @@ outputs/pipeline/<dataset>/refine.rounds/
 
 `refine.rounds/` 会保存每一轮的 `input`、`success`、`raw`、`failed` 和 `summary` 文件，便于像 generate/validation 一样按轮次排查。
 
-该阶段只替换 `steps` 字段，其余字段原样保留。若手动中断，重新运行会从 `refined.jsonl` 继续。
+该阶段只替换 `steps` 字段，其余字段原样保留。默认会从 validated 输入重新改写步骤，并要求每一步先结合题目信息或上一步得到的量说明逻辑，再给出需要进行的计算；类似 `First, calculate...` 这种先下命令再解释的模板化写法会被拒绝并重试。若手动中断，重新运行会从 `refined.jsonl` 继续。
+
+如果已经有旧的 `refined.jsonl`，但想只重跑 refine 而不重跑前面阶段，可以执行：
+
+```bash
+REFINE_FORCE=1 bash run/07_refine_solution_steps.sh gsm8k
+```
 
 ## 训练数据导出
 
