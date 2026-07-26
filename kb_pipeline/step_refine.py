@@ -120,24 +120,29 @@ def _refine_prompt(record: Dict[str, Any], retry_reason: str = "") -> List[Dict[
             "Do not change the question, answer, difficulty, numbers, or mathematical solution path.",
             "Do not add new assumptions, new quantities, alternative methods, or trial-and-error.",
             "Each output step must start with Step 1:, Step 2:, and so on.",
+            "Rewrite only when the current step wording is not a good training target; keep already clear reasoning compact.",
             "Each step must first ground the reasoning in the problem information or a previously derived quantity, then state the calculation.",
-            "Write in this order: what the problem gives or what previous quantity is now being used, so what must be computed, then the equation.",
+            "Use this sentence order whenever possible: given fact or previous result -> inferred quantity -> equation.",
             "A good step looks like: 'Step 1: From the problem, there are 40 dogs and each eats 2 meals a day, so the total meals needed per day is 40 * 2 = 80 meals.'",
+            "Another good step looks like: 'Step 3: Combining these quantities, the remaining meals needed per day is 80 - 45 = 35 meals.'",
             "A bad step looks like: 'Step 1: First, calculate the total meals by multiplying dogs by meals per day: 40 * 2 = 80.'",
+            "Improve bad command-first wording by moving the problem fact before the action; do not make the solution longer just to satisfy wording.",
             "Each step must explain why its equation is relevant: it may use a condition from the problem, one previous result, or several independently computed quantities.",
             "Do not pretend every step depends only on the immediately previous step. Independent intermediate quantities are allowed before they are combined.",
             "Name the intermediate value produced by each calculation, especially if it is used later.",
             "Use concise reasoning connectors such as From the problem, Since, So, Therefore, or Combining these quantities.",
-            "Avoid command-first openings such as 'First, calculate', 'Next, find', 'Then, determine', or bare 'Calculate'.",
+            "Avoid opening most steps with commands such as 'First, calculate', 'Next, find', 'Then, determine', or bare 'Calculate'.",
             "Prefer one main inference or equation per step. Split packed semicolon computations when needed.",
-            "Keep the steps concise; improve clarity without adding verbose commentary.",
+            "Keep the steps concise; improve clarity and pass the local quality check on the first attempt.",
         ],
         "output_schema": {"steps": ["Step 1: ...", "Step 2: ..."]},
     }
     if retry_reason:
         payload["previous_refine_error"] = retry_reason
         payload["retry_instruction"] = (
-            "Fix only the step wording/format problem. Keep the same validated math."
+            "Fix only the named step wording/format problem. Keep the same validated math. "
+            "If the error mentions command-first wording, rewrite those step openings so "
+            "they begin with the relevant problem fact or previous quantity."
         )
     return _json_message(
         (
@@ -176,19 +181,22 @@ def _step_quality_issue(steps: Sequence[str]) -> str:
     mechanical = 0
     command_first = 0
     anchored = 0
-    for step in normalized:
+    first_step_command_first = False
+    for index, step in enumerate(normalized, start=1):
         body = _strip_step_label(step)
         if MECHANICAL_START_RE.search(step) and not EXPLANATORY_MECHANICAL_RE.search(body):
             mechanical += 1
         if COMMAND_FIRST_RE.search(step):
             command_first += 1
-        if PROBLEM_ANCHORED_RE.search(body):
+            if index == 1:
+                first_step_command_first = True
+        if PROBLEM_ANCHORED_RE.search(body) or CONNECTIVE_RE.search(body):
             anchored += 1
     if mechanical / max(1, len(normalized)) > 0.5:
         return "too many steps still start mechanically"
-    if command_first:
-        return "steps must not start with command-first wording such as calculate/find/determine"
-    if len(normalized) >= 2 and anchored / len(normalized) < 0.6:
+    if first_step_command_first or command_first / max(1, len(normalized)) > 0.4:
+        return "too many steps start with command-first wording such as calculate/find/determine"
+    if len(normalized) >= 2 and anchored / len(normalized) < 0.5:
         return "too few steps first ground the calculation in problem information or prior quantities"
 
     connective = sum(1 for step in normalized if CONNECTIVE_RE.search(_strip_step_label(step)))
@@ -637,7 +645,7 @@ def refine_solution_steps(
             force_json=_parse_bool_env("REFINE_FORCE_JSON", True),
             checkpoint_every=_parse_int_env("REFINE_CHECKPOINT_EVERY", 50),
             resume=_parse_bool_env("REFINE_RESUME", True),
-            force_rewrite=_parse_bool_env("REFINE_FORCE_REWRITE", True),
+            force_rewrite=_parse_bool_env("REFINE_FORCE_REWRITE", False),
             progress_every=_parse_int_env("REFINE_PROGRESS_EVERY", 20),
             progress_interval=_parse_float_env("REFINE_PROGRESS_INTERVAL", 10.0),
         )
