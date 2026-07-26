@@ -19,6 +19,14 @@ class StepRefineQualityTests(unittest.TestCase):
         ]
         self.assertEqual(_step_quality_issue(steps), "")
 
+    def test_allows_one_late_command_word_when_reasoning_is_grounded(self):
+        steps = [
+            "Step 1: From the problem, there are 5 tanks and each holds 200 liters, so the large tanks hold 5 * 200 = 1000 liters.",
+            "Step 2: Since the small tanks hold 240 liters together, the aquarium has 1000 + 240 = 1240 liters.",
+            "Step 3: Finally, determine the weekly replacement amount from the total volume, so 1240 * 0.10 = 124 liters.",
+        ]
+        self.assertEqual(_step_quality_issue(steps), "")
+
 
 if __name__ == "__main__":
     unittest.main()
