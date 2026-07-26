@@ -64,6 +64,16 @@ signal_process_tree() {
   kill "-${signal_name}" "${parent_pid}" >/dev/null 2>&1 || true
 }
 
+stop_log_rotator() {
+  [[ -n "${PID_FILE}" && -f "${PID_FILE}.logrotator" ]] || return 0
+  local rotator_pid
+  rotator_pid="$(cat "${PID_FILE}.logrotator" 2>/dev/null || true)"
+  if [[ -n "${rotator_pid}" && "${rotator_pid}" != "$$" ]]; then
+    kill "${rotator_pid}" >/dev/null 2>&1 || true
+  fi
+  rm -f "${PID_FILE}.logrotator"
+}
+
 stop_api_pids() {
   local pids="$1"
   [[ -z "${pids}" ]] && return 0
@@ -111,6 +121,7 @@ if [[ -n "${PID_FILE}" && -f "${PID_FILE}" ]]; then
     CMDLINE="$(tr '\0' ' ' < "/proc/${PID}/cmdline" 2>/dev/null || true)"
     if [[ "${CMDLINE}" != *"vllm.entrypoints.openai.api_server"* ]]; then
       echo "[stop_vllm] stale PID file ignored; PID ${PID} is not vLLM" >&2
+      stop_log_rotator
       rm -f "${PID_FILE}" "${PID_FILE}.pgid" "${PID_FILE%.pid}.model" "${PID_FILE%.pid}.python"
       API_PIDS="$(api_server_pids || true)"
       stop_api_pids "${API_PIDS}"
@@ -120,6 +131,7 @@ if [[ -n "${PID_FILE}" && -f "${PID_FILE}" ]]; then
       echo "[stop_vllm] PID file points to vLLM on a different port; falling back to --port ${PORT}" >&2
       API_PIDS="$(api_server_pids || true)"
       stop_api_pids "${API_PIDS}"
+      stop_log_rotator
       rm -f "${PID_FILE}" "${PID_FILE}.pgid" "${PID_FILE%.pid}.model" "${PID_FILE%.pid}.python"
       exit 0
     fi
@@ -152,11 +164,13 @@ if [[ -n "${PID_FILE}" && -f "${PID_FILE}" ]]; then
     fi
   else
     echo "[stop_vllm] stale PID file ignored; PID ${PID} is not running" >&2
+    stop_log_rotator
     rm -f "${PID_FILE}" "${PID_FILE}.pgid" "${PID_FILE%.pid}.model" "${PID_FILE%.pid}.python"
     API_PIDS="$(api_server_pids || true)"
     stop_api_pids "${API_PIDS}"
     exit 0
   fi
+  stop_log_rotator
   rm -f "${PID_FILE}" "${PID_FILE}.pgid" "${PID_FILE%.pid}.model" "${PID_FILE%.pid}.python"
 else
   # Compatibility fallback for servers started before process-group tracking.

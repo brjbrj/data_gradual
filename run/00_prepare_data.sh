@@ -26,6 +26,9 @@ ARGS=("${PYTHON_BIN}" "${ROOT_DIR}/run/prepare_data.py"
   --top-p "${CLASSIFY_TOP_P:-0.9}"
   --max-tokens "${CLASSIFY_MAX_TOKENS:-50}"
   --classify-max-retries "${CLASSIFY_MAX_RETRIES:-3}"
+  --classify-retry-log-every "${CLASSIFY_RETRY_LOG_EVERY:-10}"
+  --classify-retry-log-sample-chars "${CLASSIFY_RETRY_LOG_SAMPLE_CHARS:-240}"
+  --classify-checkpoint-every "${CLASSIFY_CHECKPOINT_EVERY:-1000}"
 )
 
 if [[ -n "${SAMPLE_LIMIT:-}" ]]; then

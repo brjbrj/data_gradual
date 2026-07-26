@@ -195,7 +195,21 @@ EVAL_N_ANSWERS=5 EVAL_TEMPERATURE=0.7 EVAL_TOP_P=0.95 bash evaluation/run_model_
 
 For data preparation, `CLASSIFY_MAX_RETRIES=-1` makes question classification
 retry indefinitely. If a model returns text outside the configured categories,
-the classifier asks it to choose again from the allowed category list.
+the classifier asks it to choose again from the allowed category list. To make
+long retries visible, set `CLASSIFY_RETRY_LOG_EVERY`; the classifier prints the
+task id, retry count, failure reason, and a short response sample every N
+retries. Set it to `0` to silence per-record retry logs.
+
+```bash
+CLASSIFY_MAX_RETRIES=-1
+CLASSIFY_RETRY_LOG_EVERY=10
+CLASSIFY_RETRY_LOG_SAMPLE_CHARS=240
+CLASSIFY_CHECKPOINT_EVERY=1000
+```
+
+`CLASSIFY_CHECKPOINT_EVERY` periodically writes completed classifications to
+the prepared JSONL. If an infinite-retry run is interrupted, rerunning the same
+prepare command skips records that already have `question_type`.
 
 ## Validation configuration
 
@@ -407,7 +421,15 @@ Foreground logging is configurable:
 VLLM_LOG_FILE=/root/brjverl/data_gradual_new/outputs/runtime/vllm.log
 VLLM_FOREGROUND_LOG=1
 VLLM_LOG_APPEND=0
+VLLM_LOG_MAX_BYTES=1073741824
+VLLM_LOG_KEEP_BYTES=209715200
+VLLM_LOG_ROTATE_INTERVAL_SEC=60
 ```
+
+When vLLM is started by the project launcher, the log rotator checks only this
+configured `VLLM_LOG_FILE`. If the file exceeds `VLLM_LOG_MAX_BYTES`, it keeps
+the last `VLLM_LOG_KEEP_BYTES` bytes and writes a truncation marker at the top.
+Set `VLLM_LOG_MAX_BYTES=0` to disable automatic truncation.
 
 Start a configured model while keeping vLLM attached to the terminal:
 

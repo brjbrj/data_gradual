@@ -314,6 +314,9 @@ def classify_jsonl(
     max_tokens: int,
     max_retries: int,
     overwrite_existing: bool = False,
+    retry_log_every: int = 10,
+    retry_log_sample_chars: int = 240,
+    checkpoint_every: int = 1000,
 ) -> Dict[str, Any]:
     prompt = _load_classify_prompt(prompt_path)
     categories = _split_categories(prompt["categories"])
@@ -328,6 +331,38 @@ def classify_jsonl(
 
     stats: Dict[str, int] = {}
     errors: List[Dict[str, Any]] = []
+    retry_log_every = max(0, int(retry_log_every))
+    retry_log_sample_chars = max(40, int(retry_log_sample_chars))
+    checkpoint_every = max(0, int(checkpoint_every))
+
+    print(
+        "[prepare] classification pending="
+        f"{len(pending)} total={len(records)} concurrency={max(1, int(concurrency))} "
+        f"max_retries={max_retries} retry_log_every={retry_log_every} "
+        f"checkpoint_every={checkpoint_every}",
+        flush=True,
+    )
+
+    def log_retry(
+        *,
+        index: int,
+        record: Dict[str, Any],
+        attempt: int,
+        reason: str,
+        sample: str = "",
+    ) -> None:
+        if retry_log_every <= 0 or attempt <= 0 or attempt % retry_log_every != 0:
+            return
+        task_id = record.get("task_id", index)
+        cleaned = " ".join(str(sample or "").split())
+        if len(cleaned) > retry_log_sample_chars:
+            cleaned = cleaned[:retry_log_sample_chars] + "..."
+        print(
+            "[prepare] classification retry "
+            f"task_id={task_id} index={index} attempt={attempt} reason={reason} "
+            f"last={cleaned!r}",
+            flush=True,
+        )
 
     def classify_one(item: Tuple[int, Dict[str, Any]]) -> Tuple[int, str, Optional[str]]:
         index, record = item
@@ -354,6 +389,13 @@ def classify_jsonl(
                 )
             except Exception as exc:
                 last_error = str(exc)
+                log_retry(
+                    index=index,
+                    record=record,
+                    attempt=attempt + 1,
+                    reason="request_error",
+                    sample=last_error,
+                )
                 if not infinite_retries and attempt >= int(max_retries):
                     return index, "", last_error
                 time.sleep(min(3.0 * (attempt + 1), 15.0))
@@ -364,6 +406,13 @@ def classify_jsonl(
             if category:
                 return index, category, None
             last_error = f"classification response did not match categories: {response[:200]}"
+            log_retry(
+                index=index,
+                record=record,
+                attempt=attempt + 1,
+                reason="invalid_category",
+                sample=response,
+            )
             if not infinite_retries and attempt >= int(max_retries):
                 return index, "", last_error
             time.sleep(min(1.0 * (attempt + 1), 5.0))
@@ -382,6 +431,12 @@ def classify_jsonl(
                 errors.append({"task_id": records[index].get("task_id"), "error": error})
             if done % 20 == 0 or done == len(futures):
                 print(f"[prepare] classified {done}/{len(futures)} pending records")
+            if checkpoint_every > 0 and done % checkpoint_every == 0 and done != len(futures):
+                _atomic_write_jsonl(output_path, records, backup=False)
+                print(
+                    f"[prepare] checkpoint saved {done}/{len(futures)} pending records to {output_path}",
+                    flush=True,
+                )
 
     _atomic_write_jsonl(output_path, records, backup=input_path == output_path)
     return {
@@ -416,6 +471,9 @@ def prepare_data(
     force_format: bool = False,
     skip_format: bool = False,
     classify_max_retries: int = 3,
+    classify_retry_log_every: int = 10,
+    classify_retry_log_sample_chars: int = 240,
+    classify_checkpoint_every: int = 1000,
 ) -> Dict[str, Any]:
     source_schema = inspect_jsonl_schema(input_path, sample_limit=sample_limit)
     should_format = force_format or (not skip_format and source_schema["needs_format"])
@@ -444,6 +502,9 @@ def prepare_data(
             max_tokens=max_tokens,
             max_retries=classify_max_retries,
             overwrite_existing=overwrite_classification,
+            retry_log_every=classify_retry_log_every,
+            retry_log_sample_chars=classify_retry_log_sample_chars,
+            checkpoint_every=classify_checkpoint_every,
         )
     elif classify:
         classify_stats = {
@@ -494,6 +555,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--top-p", type=float, default=float(os.environ.get("CLASSIFY_TOP_P", "0.9")))
     parser.add_argument("--max-tokens", type=int, default=int(os.environ.get("CLASSIFY_MAX_TOKENS", "50")))
     parser.add_argument("--classify-max-retries", type=int, default=int(os.environ.get("CLASSIFY_MAX_RETRIES", "3")))
+    parser.add_argument("--classify-retry-log-every", type=int, default=int(os.environ.get("CLASSIFY_RETRY_LOG_EVERY", "10")))
+    parser.add_argument(
+        "--classify-retry-log-sample-chars",
+        type=int,
+        default=int(os.environ.get("CLASSIFY_RETRY_LOG_SAMPLE_CHARS", "240")),
+    )
+    parser.add_argument("--classify-checkpoint-every", type=int, default=int(os.environ.get("CLASSIFY_CHECKPOINT_EVERY", "1000")))
     parser.add_argument("--sample-limit", type=int, default=None)
     parser.add_argument("--overwrite-classification", action="store_true")
     args = parser.parse_args(argv)
@@ -523,6 +591,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         force_format=args.force_format,
         skip_format=args.skip_format,
         classify_max_retries=args.classify_max_retries,
+        classify_retry_log_every=args.classify_retry_log_every,
+        classify_retry_log_sample_chars=args.classify_retry_log_sample_chars,
+        classify_checkpoint_every=args.classify_checkpoint_every,
     )
     print(json.dumps(stats, ensure_ascii=False, indent=2))
     return 0

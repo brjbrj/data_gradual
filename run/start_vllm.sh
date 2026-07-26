@@ -60,6 +60,9 @@ ENFORCE_EAGER="${VLLM_ENFORCE_EAGER:-0}"
 DISABLE_CUSTOM_ALL_REDUCE="${VLLM_DISABLE_CUSTOM_ALL_REDUCE:-0}"
 FOREGROUND_LOG="${VLLM_FOREGROUND_LOG:-1}"
 LOG_APPEND="${VLLM_LOG_APPEND:-0}"
+LOG_MAX_BYTES="${VLLM_LOG_MAX_BYTES:-1073741824}"
+LOG_KEEP_BYTES="${VLLM_LOG_KEEP_BYTES:-209715200}"
+LOG_ROTATE_INTERVAL_SEC="${VLLM_LOG_ROTATE_INTERVAL_SEC:-60}"
 
 CUDA_VISIBLE_DEVICES_VALUE="${VLLM_CUDA_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-0,1}}"
 NCCL_P2P_DISABLE_VALUE="${VLLM_NCCL_P2P_DISABLE:-${NCCL_P2P_DISABLE:-1}}"
@@ -84,6 +87,36 @@ is_enabled() {
     1|true|yes|on) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+start_log_rotator() {
+  local server_pid="$1"
+  local log_file="$2"
+  local max_bytes="${3:-0}"
+  local keep_bytes="${4:-0}"
+  local interval_sec="${5:-60}"
+  if [[ "${max_bytes}" -le 0 || "${keep_bytes}" -le 0 ]]; then
+    return 0
+  fi
+  (
+    while kill -0 "${server_pid}" >/dev/null 2>&1; do
+      sleep "${interval_sec}" || true
+      [[ -f "${log_file}" ]] || continue
+      local size
+      size="$(stat -c '%s' "${log_file}" 2>/dev/null || printf '0')"
+      if [[ "${size}" -gt "${max_bytes}" ]]; then
+        local tmp_file="${log_file}.tmp.$$"
+        {
+          printf '[start_vllm] log truncated at %s because size=%s exceeded VLLM_LOG_MAX_BYTES=%s; keeping last %s bytes\n' \
+            "$(date -Is)" "${size}" "${max_bytes}" "${keep_bytes}"
+          tail -c "${keep_bytes}" "${log_file}" 2>/dev/null || true
+        } > "${tmp_file}"
+        cat "${tmp_file}" > "${log_file}"
+        rm -f "${tmp_file}"
+      fi
+    done
+  ) &
+  echo "$!"
 }
 
 apply_env_setting() {
@@ -303,6 +336,13 @@ if [[ "${BACKGROUND}" -eq 1 ]]; then
   echo "${SERVER_PID}" > "${PID_FILE}"
   printf '%s\n' "${MODEL_NAME}" > "${MODEL_FILE}"
   printf '%s\n' "${VLLM_PYTHON_BIN}" > "${PYTHON_FILE}"
+  ROTATOR_PID="$(start_log_rotator "${SERVER_PID}" "${LOG_FILE}" "${LOG_MAX_BYTES}" "${LOG_KEEP_BYTES}" "${LOG_ROTATE_INTERVAL_SEC}")"
+  if [[ -n "${ROTATOR_PID}" ]]; then
+    echo "${ROTATOR_PID}" > "${PID_FILE}.logrotator"
+    echo "[start_vllm] log rotator pid=${ROTATOR_PID} max_bytes=${LOG_MAX_BYTES} keep_bytes=${LOG_KEEP_BYTES}" >>"${LOG_FILE}"
+  else
+    rm -f "${PID_FILE}.logrotator"
+  fi
   echo "${PID_FILE}"
   exit 0
 fi
@@ -325,6 +365,13 @@ if is_enabled "${FOREGROUND_LOG}"; then
   echo "${SERVER_PID}" > "${PID_FILE}"
   printf '%s\n' "${MODEL_NAME}" > "${MODEL_FILE}"
   printf '%s\n' "${VLLM_PYTHON_BIN}" > "${PYTHON_FILE}"
+  ROTATOR_PID="$(start_log_rotator "${SERVER_PID}" "${LOG_FILE}" "${LOG_MAX_BYTES}" "${LOG_KEEP_BYTES}" "${LOG_ROTATE_INTERVAL_SEC}")"
+  if [[ -n "${ROTATOR_PID}" ]]; then
+    echo "${ROTATOR_PID}" > "${PID_FILE}.logrotator"
+    echo "[start_vllm] log rotator pid=${ROTATOR_PID} max_bytes=${LOG_MAX_BYTES} keep_bytes=${LOG_KEEP_BYTES}" >&2
+  else
+    rm -f "${PID_FILE}.logrotator"
+  fi
 
   if is_enabled "${LOG_APPEND}"; then
     tail -n 0 -F "${LOG_FILE}" &
@@ -337,6 +384,10 @@ if is_enabled "${FOREGROUND_LOG}"; then
     local status="${1:-$?}"
     trap - INT TERM EXIT
     kill "${TAIL_PID}" >/dev/null 2>&1 || true
+    if [[ -n "${ROTATOR_PID:-}" ]]; then
+      kill "${ROTATOR_PID}" >/dev/null 2>&1 || true
+      rm -f "${PID_FILE}.logrotator"
+    fi
     bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}" --port "${PORT}" >/dev/null 2>&1 || true
     exit "${status}"
   }
@@ -349,6 +400,10 @@ if is_enabled "${FOREGROUND_LOG}"; then
   STATUS=$?
   trap - INT TERM EXIT
   kill "${TAIL_PID}" >/dev/null 2>&1 || true
+  if [[ -n "${ROTATOR_PID:-}" ]]; then
+    kill "${ROTATOR_PID}" >/dev/null 2>&1 || true
+    rm -f "${PID_FILE}.logrotator"
+  fi
   bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${PID_FILE}" --port "${PORT}" >/dev/null 2>&1 || true
   set -e
   exit "${STATUS}"
