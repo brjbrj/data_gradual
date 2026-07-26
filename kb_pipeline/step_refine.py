@@ -34,6 +34,18 @@ MECHANICAL_START_RE = re.compile(
     r"^\s*(?:step\s*)?\d*\s*[:.)-]?\s*(?:calculate|compute|find)\b",
     re.IGNORECASE,
 )
+COMMAND_FIRST_RE = re.compile(
+    r"^\s*(?:step\s*)?\d*\s*[:.)-]?\s*"
+    r"(?:first|next|then|after that|finally)?\s*,?\s*"
+    r"(?:calculate|compute|find|determine)\b",
+    re.IGNORECASE,
+)
+PROBLEM_ANCHORED_RE = re.compile(
+    r"\b(?:from the problem|the problem states|there are|there is|each|every|"
+    r"since|because|given|has|have|operates|contains|eats|prepares|costs|"
+    r"needs|takes|holds|capacity)\b",
+    re.IGNORECASE,
+)
 CONNECTIVE_RE = re.compile(
     r"\b(?:from the problem|given|since|because|so|therefore|this means|"
     r"combining|using|after|remaining|total|needed|left|altogether|"
@@ -108,11 +120,15 @@ def _refine_prompt(record: Dict[str, Any], retry_reason: str = "") -> List[Dict[
             "Do not change the question, answer, difficulty, numbers, or mathematical solution path.",
             "Do not add new assumptions, new quantities, alternative methods, or trial-and-error.",
             "Each output step must start with Step 1:, Step 2:, and so on.",
+            "Each step must first ground the reasoning in the problem information or a previously derived quantity, then state the calculation.",
+            "Write in this order: what the problem gives or what previous quantity is now being used, so what must be computed, then the equation.",
+            "A good step looks like: 'Step 1: From the problem, there are 40 dogs and each eats 2 meals a day, so the total meals needed per day is 40 * 2 = 80 meals.'",
+            "A bad step looks like: 'Step 1: First, calculate the total meals by multiplying dogs by meals per day: 40 * 2 = 80.'",
             "Each step must explain why its equation is relevant: it may use a condition from the problem, one previous result, or several independently computed quantities.",
             "Do not pretend every step depends only on the immediately previous step. Independent intermediate quantities are allowed before they are combined.",
             "Name the intermediate value produced by each calculation, especially if it is used later.",
-            "Use concise GSM8K-style connectors such as From the problem, Since, So, Therefore, or Combining these quantities.",
-            "Avoid mechanical step openings like only 'Calculate ...'.",
+            "Use concise reasoning connectors such as From the problem, Since, So, Therefore, or Combining these quantities.",
+            "Avoid command-first openings such as 'First, calculate', 'Next, find', 'Then, determine', or bare 'Calculate'.",
             "Prefer one main inference or equation per step. Split packed semicolon computations when needed.",
             "Keep the steps concise; improve clarity without adding verbose commentary.",
         ],
@@ -158,12 +174,22 @@ def _step_quality_issue(steps: Sequence[str]) -> str:
             return f"step {index} missing expected Step {index}: label"
 
     mechanical = 0
+    command_first = 0
+    anchored = 0
     for step in normalized:
         body = _strip_step_label(step)
         if MECHANICAL_START_RE.search(step) and not EXPLANATORY_MECHANICAL_RE.search(body):
             mechanical += 1
+        if COMMAND_FIRST_RE.search(step):
+            command_first += 1
+        if PROBLEM_ANCHORED_RE.search(body):
+            anchored += 1
     if mechanical / max(1, len(normalized)) > 0.5:
         return "too many steps still start mechanically"
+    if command_first:
+        return "steps must not start with command-first wording such as calculate/find/determine"
+    if len(normalized) >= 2 and anchored / len(normalized) < 0.6:
+        return "too few steps first ground the calculation in problem information or prior quantities"
 
     connective = sum(1 for step in normalized if CONNECTIVE_RE.search(_strip_step_label(step)))
     if len(normalized) >= 2 and connective / len(normalized) < 0.5:
@@ -281,6 +307,7 @@ async def refine_solution_steps_async(
     force_json: bool,
     checkpoint_every: int,
     resume: bool,
+    force_rewrite: bool,
     progress_every: int,
     progress_interval: float,
 ) -> List[Dict[str, Any]]:
@@ -308,14 +335,14 @@ async def refine_solution_steps_async(
 
     accepted: Dict[str, Dict[str, Any]] = {}
     raw_records: List[Dict[str, Any]] = []
-    if resume and output_path.exists():
+    if resume and not force_rewrite and output_path.exists():
         for index, record in enumerate(read_jsonl(output_path)):
             accepted[_record_key(record, index)] = record
-    if resume and raw_path.exists():
+    if resume and not force_rewrite and raw_path.exists():
         raw_records = read_jsonl(raw_path)
 
     recovered_from_failed = 0
-    if resume and failed_path.exists():
+    if resume and not force_rewrite and failed_path.exists():
         for failure in read_jsonl(failed_path):
             if not isinstance(failure, dict):
                 continue
@@ -350,7 +377,7 @@ async def refine_solution_steps_async(
         if key in accepted:
             continue
         existing_steps = _ensure_step_labels(_normalize_steps(record.get("steps", [])))
-        if existing_steps and not _step_quality_issue(existing_steps):
+        if not force_rewrite and existing_steps and not _step_quality_issue(existing_steps):
             accepted[key] = _project_record(record, existing_steps)
             raw_records.append(
                 {
@@ -379,7 +406,7 @@ async def refine_solution_steps_async(
         f"resume_done={len(accepted)} pending={len(pending)} "
         f"local_skip={locally_accepted} recovered_failed={recovered_from_failed} "
         f"concurrency={concurrency} max_rounds={max_rounds} "
-        f"max_tokens={max_tokens}",
+        f"max_tokens={max_tokens} force_rewrite={str(force_rewrite).lower()}",
         flush=True,
     )
 
@@ -610,6 +637,7 @@ def refine_solution_steps(
             force_json=_parse_bool_env("REFINE_FORCE_JSON", True),
             checkpoint_every=_parse_int_env("REFINE_CHECKPOINT_EVERY", 50),
             resume=_parse_bool_env("REFINE_RESUME", True),
+            force_rewrite=_parse_bool_env("REFINE_FORCE_REWRITE", True),
             progress_every=_parse_int_env("REFINE_PROGRESS_EVERY", 20),
             progress_interval=_parse_float_env("REFINE_PROGRESS_INTERVAL", 10.0),
         )
