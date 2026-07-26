@@ -232,11 +232,12 @@ Edit `config/pipeline.env`.
 | `QC_FORCE_JSON` | `0` | Optional JSON response format |
 | `QC_ROUND_RETRY_DELAY` | `1` | Delay between validation rounds |
 | `PLAN_USE_FULL_SCENE_DOMAINS` | `0` | Use the full scene pool when `1`; default `0` favors GSM8K-like everyday scenes |
-| `QC_MAX_QUESTION_CHARS` | `700` | Reject overly long questions before blind validation |
-| `QC_MAX_SOLUTION_CHARS` | `900` | Reject overly verbose generated solutions |
-| `QC_MAX_STEP_COUNT` | `10` | Reject generated solutions with too many steps |
-| `QC_TEMPLATE_CALCULATE_MAX_STEPS` | `1` | Reject formulaic outputs that start many steps with `Calculate` |
-| `QC_BLOCK_TRAINING_UNFRIENDLY_SCENES` | `1` | Reject technical warehouse/lab/software/engineering-style scenes by default |
+| `QC_ENABLE_TRAINING_STYLE_PRECHECK` | `0` | Keep validation focused on correctness; set `1` to record/refine training-style warnings during validation |
+| `QC_MAX_QUESTION_CHARS` | `700` | Training-style length warning threshold when style precheck is enabled |
+| `QC_MAX_SOLUTION_CHARS` | `900` | Training-style solution length warning threshold when style precheck is enabled |
+| `QC_MAX_STEP_COUNT` | `10` | Training-style step-count warning threshold when style precheck is enabled |
+| `QC_TEMPLATE_CALCULATE_MAX_STEPS` | `1` | Training-style template warning threshold when style precheck is enabled |
+| `QC_BLOCK_TRAINING_UNFRIENDLY_SCENES` | `1` | Training-style scene warning when style precheck is enabled |
 | `QC_WARN_OVERUSED_FINAL_ANSWERS` | `1` | Add warnings for very common final answers such as `10`, `20`, `60`, or `120` |
 | `QC_TRAINING_STYLE_HARD_FAIL` | `0` | Treat training-style issues as warnings by default, avoiding expensive repair loops |
 | `QC_SEVERE_MAX_QUESTION_CHARS` | `1200` | Still hard-fail extremely long questions |
@@ -248,6 +249,7 @@ Edit `config/pipeline.env`.
 | `REFINE_CONCURRENCY` | `128` | Concurrent step-refinement requests |
 | `REFINE_MAX_ROUNDS` | `-1` | Retry rounds for failed step refinements; `-1` means unlimited |
 | `REFINE_MAX_TOKENS` | `900` | Maximum output tokens for step refinement |
+| `REFINE_FORCE_REWRITE` | `1` | Rewrite validated input steps instead of locally accepting existing wording |
 | `REFINE_CHECKPOINT_EVERY` | `50` | Save refined output every N completed records |
 | `RUN_DATA_PREPARE` | `1` | Enable data preparation in the full pipeline; set `0` to bypass |
 | `DATA_FORMAT_TEMPLATE` | `gsm8k` | Raw-data format adapter, such as `gsm8k` or `passthrough` |
@@ -508,6 +510,18 @@ path unchanged:
 ```bash
 bash run/07_refine_solution_steps.sh gsm8k
 ```
+
+To force a fresh rewrite from `validated.jsonl` even when an older
+`refined.jsonl` exists:
+
+```bash
+REFINE_FORCE=1 bash run/07_refine_solution_steps.sh gsm8k
+```
+
+The refinement prompt requires each step to first ground the reasoning in the
+problem information or a previously derived quantity, then state the needed
+calculation. Command-first wording such as `First, calculate...` is rejected
+and retried.
 
 Outputs:
 
