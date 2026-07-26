@@ -17,7 +17,10 @@ stage_require_file "${VALIDATED_OUTPUT_PATH}" "run: bash run/06_validate_generat
 # the model remains configurable for experiments.
 stage_ensure_vllm "${REFINE_MODEL_NAME}" "step refinement"
 
-if [[ -s "${REFINE_FAILED_PATH}" ]]; then
+if stage_truthy "${REFINE_FORCE:-0}"; then
+  stage_log "07 refine_solution_steps force rerun enabled; ignoring existing refined outputs"
+  export REFINE_RESUME=0
+elif [[ -s "${REFINE_FAILED_PATH}" ]]; then
   stage_log "07 refine_solution_steps found pending failures; resume instead of skipping: ${REFINE_FAILED_PATH}"
 else
   if stage_skip_if_complete "07_refine_solution_steps" "${REFINED_OUTPUT_PATH}" "${REFINE_SUMMARY_PATH}"; then
