@@ -115,7 +115,7 @@ start_log_rotator() {
         rm -f "${tmp_file}"
       fi
     done
-  ) &
+  ) >/dev/null 2>&1 &
   echo "$!"
 }
 
