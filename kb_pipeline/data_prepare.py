@@ -187,6 +187,27 @@ def _atomic_write_jsonl(path: Path, records: Iterable[Dict[str, Any]], *, backup
         raise
 
 
+def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=str(path.parent),
+        delete=False,
+        suffix=".tmp",
+    )
+    temp_path = Path(temp_file.name)
+    try:
+        with temp_file:
+            json.dump(payload, temp_file, ensure_ascii=False, indent=2)
+            temp_file.write("\n")
+        shutil.move(str(temp_path), str(path))
+    except Exception:
+        if temp_path.exists():
+            temp_path.unlink()
+        raise
+
+
 def format_jsonl(input_path: Path, output_path: Path, *, template: str, sample_limit: Optional[int] = None) -> Dict[str, Any]:
     template_key = template.lower().strip()
     if template_key not in FORMAT_HANDLERS:
@@ -257,6 +278,38 @@ def _split_categories(categories: str) -> List[str]:
     return [item.strip() for item in categories.split(",") if item.strip()]
 
 
+def _split_filter_types(values: str) -> List[str]:
+    return [item.strip() for item in str(values or "").split(",") if item.strip()]
+
+
+def _normalize_space(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _normalized_type(value: Any) -> str:
+    return _normalize_space(value).lower()
+
+
+def filter_records_by_question_type(
+    records: Sequence[Dict[str, Any]],
+    filter_question_types: Sequence[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, int]]:
+    blocked = {_normalized_type(item) for item in filter_question_types if _normalized_type(item)}
+    if not blocked:
+        return list(records), [], {}
+    kept: List[Dict[str, Any]] = []
+    filtered: List[Dict[str, Any]] = []
+    stats: Dict[str, int] = {}
+    for record in records:
+        question_type = str(record.get("question_type", "") or "").strip()
+        if _normalized_type(question_type) in blocked:
+            filtered.append(dict(record))
+            stats[question_type] = stats.get(question_type, 0) + 1
+        else:
+            kept.append(dict(record))
+    return kept, filtered, stats
+
+
 def match_first_category(categories: Sequence[str], response: str) -> str:
     cleaned = str(response or "").strip()
     for category in categories:
@@ -321,6 +374,8 @@ def classify_jsonl(
     request_timeout: int = 120,
     request_max_retries: int = 0,
     heartbeat_interval: float = 60.0,
+    filtered_output_path: Optional[Path] = None,
+    filter_question_types: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     prompt = _load_classify_prompt(prompt_path)
     categories = _split_categories(prompt["categories"])
@@ -522,12 +577,30 @@ def classify_jsonl(
                 print_heartbeat(done, len(pending))
                 last_heartbeat = time.time()
 
-    _atomic_write_jsonl(output_path, records, backup=input_path == output_path)
+    kept_records, filtered_records, filtered_stats = filter_records_by_question_type(
+        records,
+        filter_question_types or [],
+    )
+    if filtered_output_path is not None:
+        _atomic_write_jsonl(filtered_output_path, filtered_records, backup=False)
+    if filtered_records:
+        print(
+            "[prepare] filtered "
+            f"{len(filtered_records)} records by question_type={dict(filtered_stats)} "
+            f"to {filtered_output_path}",
+            flush=True,
+        )
+
+    _atomic_write_jsonl(output_path, kept_records, backup=input_path == output_path)
     return {
         "input_path": str(input_path),
         "output_path": str(output_path),
+        "filtered_output_path": str(filtered_output_path) if filtered_output_path else "",
         "prompt_path": str(prompt_path),
         "total_count": len(records),
+        "write_count": len(kept_records),
+        "filtered_count": len(filtered_records),
+        "filtered_category_stats": filtered_stats,
         "classified_count": len(pending) - len(errors),
         "skipped_existing_count": len(records) - len(pending),
         "error_count": len(errors),
@@ -540,6 +613,8 @@ def prepare_data(
     input_path: Path,
     output_path: Path,
     *,
+    filtered_output_path: Optional[Path],
+    filter_question_types: Sequence[str],
     format_template: str,
     classify: bool,
     prompt_path: Path,
@@ -579,6 +654,8 @@ def prepare_data(
         classify_stats = classify_jsonl(
             output_path,
             output_path,
+            filtered_output_path=filtered_output_path,
+            filter_question_types=filter_question_types,
             prompt_path=prompt_path,
             model=model,
             base_url=base_url,
@@ -600,6 +677,7 @@ def prepare_data(
         classify_stats = {
             "input_path": str(output_path),
             "output_path": str(output_path),
+            "filtered_output_path": str(filtered_output_path) if filtered_output_path else "",
             "total_count": classify_input_schema["total_count"],
             "classified_count": 0,
             "skipped_existing_count": classify_input_schema["total_count"],
@@ -609,6 +687,40 @@ def prepare_data(
             "skipped": True,
             "reason": "all records already have question_type",
         }
+        records = [payload for _, payload in _iter_jsonl(output_path)]
+        kept_records, filtered_records, filtered_stats = filter_records_by_question_type(
+            records,
+            filter_question_types,
+        )
+        if filtered_output_path is not None:
+            _atomic_write_jsonl(filtered_output_path, filtered_records, backup=False)
+        if filtered_records:
+            _atomic_write_jsonl(output_path, kept_records, backup=True)
+            print(
+                "[prepare] filtered "
+                f"{len(filtered_records)} records by question_type={dict(filtered_stats)} "
+                f"to {filtered_output_path}",
+                flush=True,
+            )
+        classify_stats["write_count"] = len(kept_records)
+        classify_stats["filtered_count"] = len(filtered_records)
+        classify_stats["filtered_category_stats"] = filtered_stats
+    elif filter_question_types:
+        records = [payload for _, payload in _iter_jsonl(output_path)]
+        kept_records, filtered_records, filtered_stats = filter_records_by_question_type(
+            records,
+            filter_question_types,
+        )
+        if filtered_output_path is not None:
+            _atomic_write_jsonl(filtered_output_path, filtered_records, backup=False)
+        if filtered_records:
+            _atomic_write_jsonl(output_path, kept_records, backup=True)
+            print(
+                "[prepare] filtered "
+                f"{len(filtered_records)} records by question_type={dict(filtered_stats)} "
+                f"to {filtered_output_path}",
+                flush=True,
+            )
     return {
         "source_schema": source_schema,
         "prepared_schema_before_classification": classify_input_schema,
@@ -626,6 +738,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Prepare raw math JSONL data before KB construction.")
     parser.add_argument("--input", required=True, help="Raw input JSONL path")
     parser.add_argument("--output", required=False, help="Prepared output JSONL path")
+    parser.add_argument("--filtered-output", required=False, help="Filtered records JSONL path")
+    parser.add_argument("--summary-output", required=False, help="Prepare completion summary JSON path")
+    parser.add_argument(
+        "--filter-question-types",
+        default=os.environ.get("PREPARE_FILTER_QUESTION_TYPES", "Other / Non-Mathematical"),
+        help="Comma-separated question_type values to remove from prepared output",
+    )
     parser.add_argument("--format-template", default=os.environ.get("DATA_FORMAT_TEMPLATE", "gsm8k"))
     parser.add_argument("--inspect", action="store_true", help="Only inspect input schema and exit")
     parser.add_argument("--inspect-limit", type=int, default=None, help="Optional record cap for schema inspection")
@@ -677,6 +796,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     stats = prepare_data(
         Path(args.input),
         Path(args.output),
+        filtered_output_path=Path(args.filtered_output) if args.filtered_output else None,
+        filter_question_types=_split_filter_types(args.filter_question_types),
         format_template=args.format_template,
         classify=args.classify,
         prompt_path=Path(args.classify_prompt),
@@ -699,6 +820,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         classify_request_max_retries=args.classify_request_max_retries,
         classify_heartbeat_interval=args.classify_heartbeat_interval,
     )
+    if args.summary_output:
+        _atomic_write_json(Path(args.summary_output), stats)
     print(json.dumps(stats, ensure_ascii=False, indent=2))
     return 0
 
