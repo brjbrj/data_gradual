@@ -29,6 +29,9 @@ ARGS=("${PYTHON_BIN}" "${ROOT_DIR}/run/prepare_data.py"
   --classify-retry-log-every "${CLASSIFY_RETRY_LOG_EVERY:-10}"
   --classify-retry-log-sample-chars "${CLASSIFY_RETRY_LOG_SAMPLE_CHARS:-240}"
   --classify-checkpoint-every "${CLASSIFY_CHECKPOINT_EVERY:-1000}"
+  --classify-timeout "${CLASSIFY_TIMEOUT:-120}"
+  --classify-request-max-retries "${CLASSIFY_REQUEST_MAX_RETRIES:-0}"
+  --classify-heartbeat-interval "${CLASSIFY_HEARTBEAT_INTERVAL:-60}"
 )
 
 if [[ -n "${SAMPLE_LIMIT:-}" ]]; then
