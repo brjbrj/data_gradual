@@ -380,6 +380,7 @@ def precheck_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
     calculate_max_steps = _parse_int_env("QC_TEMPLATE_CALCULATE_MAX_STEPS", 1)
     block_unfriendly_scene = _parse_bool_env("QC_BLOCK_TRAINING_UNFRIENDLY_SCENES", True)
     warn_overused_answer = _parse_bool_env("QC_WARN_OVERUSED_FINAL_ANSWERS", True)
+    enable_style_precheck = _parse_bool_env("QC_ENABLE_TRAINING_STYLE_PRECHECK", False)
     style_hard_fail = _parse_bool_env("QC_TRAINING_STYLE_HARD_FAIL", False)
     severe_question_chars = _parse_int_env("QC_SEVERE_MAX_QUESTION_CHARS", 1200)
     severe_solution_chars = _parse_int_env("QC_SEVERE_MAX_SOLUTION_CHARS", 1800)
@@ -391,22 +392,23 @@ def precheck_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
         else:
             warnings.append(issue)
 
-    if max_question_chars > 0 and len(question) > max_question_chars:
-        add_style_issue("question_too_long_for_training")
     solution_text = normalize_whitespace(" ".join(steps))
-    if max_solution_chars > 0 and len(solution_text) > max_solution_chars:
-        add_style_issue("solution_too_long_for_training")
-    if max_step_count > 0 and len(steps) > max_step_count:
-        add_style_issue("too_many_steps_for_training")
-    calculate_starts = sum(1 for step in steps if CALCULATE_STEP_RE.search(step))
-    if (
-        calculate_max_steps >= 0
-        and calculate_starts > calculate_max_steps
-        and calculate_starts / max(1, len(steps)) >= 0.4
-    ):
-        add_style_issue("template_calculate_steps")
-    if block_unfriendly_scene and TRAINING_UNFRIENDLY_SCENE_RE.search(question):
-        add_style_issue("training_unfriendly_scene")
+    if enable_style_precheck:
+        if max_question_chars > 0 and len(question) > max_question_chars:
+            add_style_issue("question_too_long_for_training")
+        if max_solution_chars > 0 and len(solution_text) > max_solution_chars:
+            add_style_issue("solution_too_long_for_training")
+        if max_step_count > 0 and len(steps) > max_step_count:
+            add_style_issue("too_many_steps_for_training")
+        calculate_starts = sum(1 for step in steps if CALCULATE_STEP_RE.search(step))
+        if (
+            calculate_max_steps >= 0
+            and calculate_starts > calculate_max_steps
+            and calculate_starts / max(1, len(steps)) >= 0.4
+        ):
+            add_style_issue("template_calculate_steps")
+        if block_unfriendly_scene and TRAINING_UNFRIENDLY_SCENE_RE.search(question):
+            add_style_issue("training_unfriendly_scene")
     if META_REASONING_STEP_RE.search(solution_text):
         issues.append("meta_reasoning_in_steps")
     if warn_overused_answer and answer in OVERUSED_FINAL_ANSWERS:
