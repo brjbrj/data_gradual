@@ -6,8 +6,9 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -317,11 +318,20 @@ def classify_jsonl(
     retry_log_every: int = 10,
     retry_log_sample_chars: int = 240,
     checkpoint_every: int = 1000,
+    request_timeout: int = 120,
+    request_max_retries: int = 0,
+    heartbeat_interval: float = 60.0,
 ) -> Dict[str, Any]:
     prompt = _load_classify_prompt(prompt_path)
     categories = _split_categories(prompt["categories"])
     records = [payload for _, payload in _iter_jsonl(input_path)]
-    client = VLLMClient(base_url=base_url, model=model, api_key=api_key)
+    client = VLLMClient(
+        base_url=base_url,
+        model=model,
+        api_key=api_key,
+        timeout=request_timeout,
+        max_retries=request_max_retries,
+    )
 
     pending: List[Tuple[int, Dict[str, Any]]] = []
     for index, record in enumerate(records):
@@ -334,14 +344,64 @@ def classify_jsonl(
     retry_log_every = max(0, int(retry_log_every))
     retry_log_sample_chars = max(40, int(retry_log_sample_chars))
     checkpoint_every = max(0, int(checkpoint_every))
+    heartbeat_interval = max(0.0, float(heartbeat_interval))
+    state_lock = threading.Lock()
+    active_state: Dict[int, Dict[str, Any]] = {}
 
     print(
         "[prepare] classification pending="
         f"{len(pending)} total={len(records)} concurrency={max(1, int(concurrency))} "
         f"max_retries={max_retries} retry_log_every={retry_log_every} "
-        f"checkpoint_every={checkpoint_every}",
+        f"checkpoint_every={checkpoint_every} request_timeout={request_timeout} "
+        f"request_max_retries={request_max_retries} heartbeat_interval={heartbeat_interval}",
         flush=True,
     )
+
+    def update_state(index: int, record: Dict[str, Any], **updates: Any) -> None:
+        task_id = record.get("task_id", index)
+        with state_lock:
+            current = active_state.setdefault(
+                index,
+                {
+                    "task_id": task_id,
+                    "index": index,
+                    "attempt": 0,
+                    "phase": "queued",
+                    "updated_at": time.time(),
+                    "last": "",
+                },
+            )
+            current.update(updates)
+            current["updated_at"] = time.time()
+
+    def clear_state(index: int) -> None:
+        with state_lock:
+            active_state.pop(index, None)
+
+    def print_heartbeat(done_count: int, total_count: int) -> None:
+        with state_lock:
+            states = sorted(
+                active_state.values(),
+                key=lambda item: float(item.get("updated_at", 0.0)),
+            )
+        now = time.time()
+        samples = []
+        for item in states[:8]:
+            age = int(now - float(item.get("updated_at", now)))
+            last = " ".join(str(item.get("last", "") or "").split())
+            if len(last) > 120:
+                last = last[:120] + "..."
+            samples.append(
+                f"task_id={item.get('task_id')} index={item.get('index')} "
+                f"attempt={item.get('attempt')} phase={item.get('phase')} age={age}s "
+                f"last={last!r}"
+            )
+        print(
+            "[prepare] classification heartbeat "
+            f"done={done_count}/{total_count} active={len(states)} "
+            f"samples={samples}",
+            flush=True,
+        )
 
     def log_retry(
         *,
@@ -373,6 +433,7 @@ def classify_jsonl(
         infinite_retries = int(max_retries) < 0
         last_error = ""
         last_response = ""
+        update_state(index, record, attempt=attempt + 1, phase="start")
         while infinite_retries or attempt <= int(max_retries):
             messages = (
                 _build_classify_messages(question, prompt)
@@ -380,6 +441,7 @@ def classify_jsonl(
                 else _build_reclassify_messages(question, prompt, last_response or last_error)
             )
             try:
+                update_state(index, record, attempt=attempt + 1, phase="request", last=last_error or last_response)
                 response = client.chat(
                     messages,
                     temperature=temperature,
@@ -389,6 +451,7 @@ def classify_jsonl(
                 )
             except Exception as exc:
                 last_error = str(exc)
+                update_state(index, record, attempt=attempt + 1, phase="request_error", last=last_error)
                 log_retry(
                     index=index,
                     record=record,
@@ -402,10 +465,12 @@ def classify_jsonl(
                 attempt += 1
                 continue
             last_response = response
+            update_state(index, record, attempt=attempt + 1, phase="parse_response", last=response)
             category = match_first_category(categories, response)
             if category:
                 return index, category, None
             last_error = f"classification response did not match categories: {response[:200]}"
+            update_state(index, record, attempt=attempt + 1, phase="invalid_category", last=response)
             log_retry(
                 index=index,
                 record=record,
@@ -421,22 +486,41 @@ def classify_jsonl(
 
     workers = max(1, int(concurrency))
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(classify_one, item) for item in pending]
-        for done, future in enumerate(as_completed(futures), start=1):
-            index, category, error = future.result()
-            records[index]["question_type"] = category
-            if category:
-                stats[category] = stats.get(category, 0) + 1
-            if error:
-                errors.append({"task_id": records[index].get("task_id"), "error": error})
-            if done % 20 == 0 or done == len(futures):
-                print(f"[prepare] classified {done}/{len(futures)} pending records")
-            if checkpoint_every > 0 and done % checkpoint_every == 0 and done != len(futures):
-                _atomic_write_jsonl(output_path, records, backup=False)
-                print(
-                    f"[prepare] checkpoint saved {done}/{len(futures)} pending records to {output_path}",
-                    flush=True,
-                )
+        future_to_item = {executor.submit(classify_one, item): item for item in pending}
+        done = 0
+        last_heartbeat = time.time()
+        while future_to_item:
+            timeout = heartbeat_interval if heartbeat_interval > 0 else None
+            completed, _ = wait(
+                future_to_item,
+                timeout=timeout,
+                return_when=FIRST_COMPLETED,
+            )
+            if not completed:
+                print_heartbeat(done, len(pending))
+                last_heartbeat = time.time()
+                continue
+            for future in completed:
+                item_index, _ = future_to_item.pop(future)
+                clear_state(item_index)
+                done += 1
+                index, category, error = future.result()
+                records[index]["question_type"] = category
+                if category:
+                    stats[category] = stats.get(category, 0) + 1
+                if error:
+                    errors.append({"task_id": records[index].get("task_id"), "error": error})
+                if done % 20 == 0 or done == len(pending):
+                    print(f"[prepare] classified {done}/{len(pending)} pending records", flush=True)
+                if checkpoint_every > 0 and done % checkpoint_every == 0 and done != len(pending):
+                    _atomic_write_jsonl(output_path, records, backup=False)
+                    print(
+                        f"[prepare] checkpoint saved {done}/{len(pending)} pending records to {output_path}",
+                        flush=True,
+                    )
+            if heartbeat_interval > 0 and time.time() - last_heartbeat >= heartbeat_interval:
+                print_heartbeat(done, len(pending))
+                last_heartbeat = time.time()
 
     _atomic_write_jsonl(output_path, records, backup=input_path == output_path)
     return {
@@ -474,6 +558,9 @@ def prepare_data(
     classify_retry_log_every: int = 10,
     classify_retry_log_sample_chars: int = 240,
     classify_checkpoint_every: int = 1000,
+    classify_timeout: int = 120,
+    classify_request_max_retries: int = 0,
+    classify_heartbeat_interval: float = 60.0,
 ) -> Dict[str, Any]:
     source_schema = inspect_jsonl_schema(input_path, sample_limit=sample_limit)
     should_format = force_format or (not skip_format and source_schema["needs_format"])
@@ -505,6 +592,9 @@ def prepare_data(
             retry_log_every=classify_retry_log_every,
             retry_log_sample_chars=classify_retry_log_sample_chars,
             checkpoint_every=classify_checkpoint_every,
+            request_timeout=classify_timeout,
+            request_max_retries=classify_request_max_retries,
+            heartbeat_interval=classify_heartbeat_interval,
         )
     elif classify:
         classify_stats = {
@@ -562,6 +652,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default=int(os.environ.get("CLASSIFY_RETRY_LOG_SAMPLE_CHARS", "240")),
     )
     parser.add_argument("--classify-checkpoint-every", type=int, default=int(os.environ.get("CLASSIFY_CHECKPOINT_EVERY", "1000")))
+    parser.add_argument("--classify-timeout", type=int, default=int(os.environ.get("CLASSIFY_TIMEOUT", "120")))
+    parser.add_argument(
+        "--classify-request-max-retries",
+        type=int,
+        default=int(os.environ.get("CLASSIFY_REQUEST_MAX_RETRIES", "0")),
+    )
+    parser.add_argument(
+        "--classify-heartbeat-interval",
+        type=float,
+        default=float(os.environ.get("CLASSIFY_HEARTBEAT_INTERVAL", "60")),
+    )
     parser.add_argument("--sample-limit", type=int, default=None)
     parser.add_argument("--overwrite-classification", action="store_true")
     args = parser.parse_args(argv)
@@ -594,6 +695,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         classify_retry_log_every=args.classify_retry_log_every,
         classify_retry_log_sample_chars=args.classify_retry_log_sample_chars,
         classify_checkpoint_every=args.classify_checkpoint_every,
+        classify_timeout=args.classify_timeout,
+        classify_request_max_retries=args.classify_request_max_retries,
+        classify_heartbeat_interval=args.classify_heartbeat_interval,
     )
     print(json.dumps(stats, ensure_ascii=False, indent=2))
     return 0
