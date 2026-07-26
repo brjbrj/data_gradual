@@ -16,6 +16,9 @@ RAW_DATA_PATH="${RAW_INPUT_PATH:-${INPUT_PATH}}"
 ARGS=("${PYTHON_BIN}" "${ROOT_DIR}/run/prepare_data.py"
   --input "${RAW_DATA_PATH}"
   --output "${PREPARED_INPUT_PATH}"
+  --filtered-output "${PREPARED_FILTERED_PATH}"
+  --summary-output "${PREPARED_SUMMARY_PATH}"
+  --filter-question-types "${PREPARE_FILTER_QUESTION_TYPES:-Other / Non-Mathematical}"
   --format-template "${FORMAT_TEMPLATE}"
   --classify-prompt "${CLASSIFY_PROMPT_PATH:-${ROOT_DIR}/prompt/classify.json}"
   --model "${CLASSIFY_MODEL:-${VLLM_MODEL:-}}"
@@ -51,7 +54,7 @@ if stage_truthy "${CLASSIFY_OVERWRITE_EXISTING:-0}"; then
 fi
 ARGS+=("${STAGE_REMAINING_ARGS[@]}")
 
-if stage_skip_if_complete "00_prepare_data" "${PREPARED_INPUT_PATH}"; then
+if stage_skip_if_complete "00_prepare_data" "${PREPARED_INPUT_PATH}" "${PREPARED_SUMMARY_PATH}"; then
   exit 0
 fi
 
