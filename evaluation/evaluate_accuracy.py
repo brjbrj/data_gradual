@@ -213,12 +213,15 @@ def prepare_agieval_eng_qa_record(record: Dict[str, Any], index: int) -> Dict[st
         str(record.get("rationale", record.get("solution_steps", "")) or "").strip(),
         flags=re.IGNORECASE,
     )
-    return {
+    prepared = {
         "task_id": record.get("task_id", index),
         "question": question,
         "answer": normalize_choice_token(record.get("correct", record.get("answer", ""))),
         "solution_steps": rationale,
     }
+    if record.get("question_type") is not None:
+        prepared["question_type"] = record.get("question_type")
+    return prepared
 
 
 def is_prepared_record(record: Dict[str, Any]) -> bool:
@@ -239,18 +242,49 @@ def prepare_record(record: Dict[str, Any], index: int, *, format_template: str) 
         return prepare_agieval_eng_qa_record(record, index)
     if template in {"auto", "gsm8k"}:
         answer, solution_steps = extract_answer_and_steps_from_gsm8k(str(record.get("answer", "")))
-        return {
+        prepared = {
             "task_id": record.get("task_id", index),
             "question": str(record.get("question", "")).strip(),
             "answer": answer,
             "solution_steps": solution_steps,
         }
+        if record.get("question_type") is not None:
+            prepared["question_type"] = record.get("question_type")
+        return prepared
     if template in {"passthrough", "none"}:
         prepared = dict(record)
         prepared.setdefault("task_id", index)
         prepared.setdefault("solution_steps", "")
         return prepared
     raise ValueError(f"unsupported EVAL_FORMAT_TEMPLATE={format_template}")
+
+
+def split_filter_types(values: str) -> List[str]:
+    return [item.strip() for item in str(values or "").split(",") if item.strip()]
+
+
+def normalized_type(value: Any) -> str:
+    return normalize_whitespace(str(value or "")).lower()
+
+
+def filter_records_by_question_type(
+    records: Sequence[Dict[str, Any]],
+    filter_question_types: Sequence[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, int]]:
+    blocked = {normalized_type(item) for item in filter_question_types if normalized_type(item)}
+    if not blocked:
+        return list(records), [], {}
+    kept: List[Dict[str, Any]] = []
+    filtered: List[Dict[str, Any]] = []
+    stats: Dict[str, int] = {}
+    for record in records:
+        question_type = str(record.get("question_type", "") or "").strip()
+        if normalized_type(question_type) in blocked:
+            filtered.append(dict(record))
+            stats[question_type] = stats.get(question_type, 0) + 1
+        else:
+            kept.append(dict(record))
+    return kept, filtered, stats
 
 
 def prepare_records(records: Sequence[Dict[str, Any]], *, format_template: str, sample_limit: Optional[int]) -> List[Dict[str, Any]]:
@@ -572,6 +606,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--seed-base", type=int, default=None)
     parser.add_argument("--prompt-mode", choices=["chat", "legacy_concat"], default="legacy_concat")
     parser.add_argument("--answer-extract-mode", choices=["number", "choice"], default=os.environ.get("EVAL_ANSWER_EXTRACT_MODE", "number"))
+    parser.add_argument(
+        "--filter-question-types",
+        default=os.environ.get("EVAL_FILTER_QUESTION_TYPES", "Other / Non-Mathematical"),
+        help="Comma-separated question_type values to remove from evaluation",
+    )
     parser.add_argument("--attempt-variation", action="store_true")
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--max-retries", type=int, default=2)
@@ -585,13 +624,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     input_path = Path(args.input)
     output_dir = Path(args.output_dir)
     prepared_path = output_dir / "prepared.jsonl"
+    filtered_path = output_dir / "filtered.jsonl"
     predictions_path = output_dir / "predictions.jsonl"
     report_path = output_dir / "report.json"
     report_md_path = output_dir / "report.md"
 
     raw_records = read_jsonl(input_path)
     prepared = prepare_records(raw_records, format_template=args.format_template, sample_limit=args.sample_limit)
+    filter_types = split_filter_types(args.filter_question_types)
+    prepared, filtered_records, filtered_stats = filter_records_by_question_type(prepared, filter_types)
     write_jsonl(prepared_path, prepared)
+    write_jsonl(filtered_path, filtered_records)
+    if filtered_records:
+        print(
+            "[eval] filtered "
+            f"{len(filtered_records)} records by question_type={dict(filtered_stats)} "
+            f"to {filtered_path}",
+            flush=True,
+        )
 
     existing = read_jsonl(predictions_path) if args.resume and predictions_path.exists() else []
     client = OpenAICompatibleClient(
@@ -623,6 +673,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     report = build_report(prepared, predictions, n_answers=max(1, args.n_answers))
     report["files"] = {
         "prepared": str(prepared_path),
+        "filtered": str(filtered_path),
         "predictions": str(predictions_path),
         "report_json": str(report_path),
         "report_md": str(report_md_path),
@@ -641,6 +692,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "seed_base": args.seed_base,
         "prompt_mode": args.prompt_mode,
         "answer_extract_mode": args.answer_extract_mode,
+        "filter_question_types": filter_types,
+        "filtered_count": len(filtered_records),
+        "filtered_category_stats": filtered_stats,
         "attempt_variation": args.attempt_variation,
         "timeout": args.timeout,
         "max_retries": args.max_retries,
