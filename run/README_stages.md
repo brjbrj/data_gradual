@@ -1,8 +1,7 @@
 # Stage Scripts
 
 These scripts split the full pipeline into independent stages. By default they
-follow `VLLM_RUNTIME_MODE` from `config/pipeline.env`. Use `STAGE_VLLM_MODE` to
-override that setting for a command.
+use an externally started vLLM server and do not start, switch, or stop vLLM.
 
 ```bash
 cd /path/to/data_gradual_new
@@ -18,26 +17,6 @@ ${OUTPUT_DIR}/analysis/${DATASET_NAME}
 ${OUTPUT_DIR}/planning/${DATASET_NAME}
 ${OUTPUT_DIR}/pipeline/${DATASET_NAME}
 ```
-
-To run two experiments with different ports or output directories, keep
-`config/pipeline.env` as the base config and pass an overlay file:
-
-```bash
-PIPELINE_CONFIG_FILE=config/parallel_exp_a.example.env bash run/run_stage_sequence.sh gsm8k
-PIPELINE_CONFIG_FILE=config/parallel_exp_b.example.env bash run/run_stage_sequence.sh gsm8k
-```
-
-The overlay is sourced after the base config, so it can override only
-`VLLM_BASE_URL`, `VLLM_API_PORT`, `OUTPUT_DIR`, `VLLM_PID_FILE`,
-`VLLM_LOG_FILE`, GPU settings, or experiment-specific knobs.
-
-Managed vLLM shutdown is scoped by the configured port. Sequence cleanup,
-single-stage cleanup, and model switching pass the active port to
-`run/stop_vllm.sh`; the port is read from `VLLM_API_PORT` / `VLLM_PORT`, or
-parsed from `VLLM_BASE_URL` if those are not set. If a PID file is missing,
-stale, or points at another port, the fallback only touches the current port.
-Without a port, `stop_vllm.sh` refuses the old global fallback unless
-`STOP_VLLM_ALLOW_GLOBAL=1` is set explicitly.
 
 The vLLM check calls `/v1/models` with `Authorization: Bearer ${VLLM_API_KEY}`.
 It accepts full paths, trailing slashes, and basename-only model IDs as matches.
@@ -88,7 +67,7 @@ Stage behavior:
 | `04_build_synthesis_plan.sh` | Skips if plan and summary already exist. |
 | `05_generate_questions.sh` | Resumes from existing `generated.jsonl`; skips successful `plan_id`s; saves every `GEN_CHECKPOINT_EVERY` completions. |
 | `06_validate_generated.sh` | Saves canonical validation files after each validation round; skips if validated outputs already exist. |
-| `07_refine_solution_steps.sh` | Resumes from `refined.jsonl`; skips already refined records; clears and rewrites `refine.failed.jsonl` each round; writes per-round logs under `refine.rounds/`. |
+| `07_refine_solution_steps.sh` | Resumes from `refined.jsonl`; skips already refined records; clears and rewrites `refine.failed.jsonl` each round. |
 | `08_export_training_data.sh` | Skips if train output and summary already exist. |
 
 Responsibility split:
@@ -172,14 +151,10 @@ If you explicitly want a stage script to start vLLM:
 STAGE_VLLM_MODE=managed bash run/05_generate_questions.sh gsm8k
 ```
 
-For a single managed stage, an already running matching vLLM service is reused
-and left running. If the current service is unhealthy or serves the wrong model,
-the stage stops it and starts the required model. Any service started or
-switched by that single stage is stopped when the stage exits. To keep it alive
-for the next manual stage:
+To stop the managed vLLM when the stage exits:
 
 ```bash
-STAGE_VLLM_MODE=managed STAGE_VLLM_STOP_ON_EXIT=0 bash run/05_generate_questions.sh gsm8k
+STAGE_VLLM_MODE=managed STAGE_VLLM_STOP_ON_EXIT=1 bash run/05_generate_questions.sh gsm8k
 ```
 
 ## Common Overrides
@@ -190,17 +165,4 @@ INPUT_PATH=/path/to/gsm8k.jsonl
 OUTPUT_DIR=/path/to/outputs
 N_ANSWERS=10
 STAGE_VLLM_WAIT_TIMEOUT=0
-```
-
-The original synthesis allocation is preserved with
-`SYNTHESIS_ALLOCATION_POLICY=legacy`. To concentrate budget into dense,
-high-value seed clusters:
-
-```bash
-SYNTHESIS_ALLOCATION_POLICY=threshold_marginal
-SYNTHESIS_MIN_PER_SEED=0
-SYNTHESIS_ACTIVE_THRESHOLD=5
-SYNTHESIS_MAX_PER_SEED=50
-SYNTHESIS_MARGINAL_ALPHA=0.7
-SYNTHESIS_THRESHOLD_BOOST=2.0
 ```

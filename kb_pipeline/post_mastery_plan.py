@@ -1,13 +1,5 @@
 from __future__ import annotations
 
-"""Build diversity-aware synthesis plans from post-mastery analysis.
-
-The plan stage decides *what kind* of new problem should be generated:
-target difficulty, mathematical skill, scene/domain, narrative style, and
-number strategy. Later stages may regenerate from a plan, so these helpers are
-kept deterministic from stable hashes rather than random state.
-"""
-
 import argparse
 import copy
 import hashlib
@@ -119,7 +111,6 @@ NUMBER_STRATEGIES = [
 
 
 def _parse_bool_env(name: str, default: bool = False) -> bool:
-    """Read a permissive boolean environment flag used by stage scripts."""
     value = os.environ.get(name)
     if value is None or value == "":
         return default
@@ -127,14 +118,12 @@ def _parse_bool_env(name: str, default: bool = False) -> bool:
 
 
 def _scene_domain_pool() -> List[Dict[str, Any]]:
-    """Return the configured scene pool, defaulting to training-friendly domains."""
     if _parse_bool_env("PLAN_USE_FULL_SCENE_DOMAINS", False):
         return SCENE_DOMAINS
     return TRAINING_FRIENDLY_SCENE_DOMAINS or SCENE_DOMAINS
 
 
 def _stable_int(value: str) -> int:
-    """Map text to a deterministic integer for reproducible plan rotation."""
     digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
     return int(digest[:16], 16)
 
@@ -165,7 +154,6 @@ def _knowledge_match_score(
     source: Dict[str, Any],
     target_bucket: str,
 ) -> int:
-    """Score how useful a KB example is as optional scene/skill inspiration."""
     candidate_knowledge = candidate.get("knowledge", {})
     source_knowledge = source.get("knowledge", {})
 
@@ -191,7 +179,6 @@ def _rank_scene_sources(
     target_bucket: str,
     seed_key: str,
 ) -> List[Dict[str, Any]]:
-    """Rank alternative KB records while excluding the seed when possible."""
     source_id = str(source.get("task_id"))
     candidates = [
         record
@@ -211,7 +198,6 @@ def _rank_scene_sources(
 
 
 def _entity_pools(entity_bank: Sequence[Dict[str, Any]]) -> Dict[str, List[str]]:
-    """Collect reusable people, focus terms, and units for plan inspiration."""
     pools: Dict[str, List[str]] = {
         "person": [],
         "focus_term": [],
@@ -228,7 +214,6 @@ def _entity_pools(entity_bank: Sequence[Dict[str, Any]]) -> Dict[str, List[str]]
 
 
 def _select_terms(pool: Sequence[str], key: str, count: int) -> List[str]:
-    """Select a deterministic slice of terms without introducing randomness."""
     if not pool or count <= 0:
         return []
     start = _stable_int(key) % len(pool)
@@ -244,7 +229,6 @@ def _scene_terms(
     concept_key: str,
     count: int,
 ) -> List[str]:
-    """Extract scene terms from KB concepts and rotate them deterministically."""
     values: List[str] = []
     for value in _as_list(concepts.get(concept_key)):
         term = str(value).strip()
@@ -256,7 +240,6 @@ def _scene_terms(
 
 
 def _compact_math_knowledge(record: Dict[str, Any]) -> Dict[str, Any]:
-    """Keep only the math fields needed by generation prompts."""
     knowledge = record.get("knowledge", {})
     return {
         "skill_tags": _as_list(knowledge.get("skill_tags")),
@@ -274,7 +257,6 @@ def _build_plan_knowledge(
     seed_id: Any,
     variant_index: int,
 ) -> Dict[str, Any]:
-    """Create the per-plan knowledge object consumed by generation."""
     key = f"{seed_id}|{variant_index}"
     scene_concepts = scene_source.get("concepts", {})
 
@@ -522,7 +504,6 @@ def replan_failed_plan(
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    """CLI entrypoint for ``run/04_build_synthesis_plan.sh``."""
     parser = argparse.ArgumentParser(
         description="Build the compact post-mastery synthesis plan."
     )

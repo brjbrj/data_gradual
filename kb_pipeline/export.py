@@ -1,12 +1,5 @@
 from __future__ import annotations
 
-"""Export validated/refined math records to the legacy SFT JSONL schema.
-
-The exporter does not validate math. It formats records that already passed
-validation, ensures one step per line, adds missing ``Step N:`` labels, and
-places the boxed final answer on its own final line.
-"""
-
 import argparse
 import json
 import re
@@ -28,12 +21,10 @@ STEP_CONNECTORS = ["First", "Next", "Then", "After that", "Finally"]
 
 
 def _normalize_text(value: Any) -> str:
-    """Collapse whitespace for stable JSONL output."""
     return " ".join(str(value or "").strip().split())
 
 
 def _normalize_answer(value: Any) -> str:
-    """Normalize final answers for the boxed-answer template."""
     text = _normalize_text(value)
     text = text.replace(",", "")
     text = text.replace("$", "")
@@ -41,7 +32,6 @@ def _normalize_answer(value: Any) -> str:
 
 
 def _normalize_steps(value: Any) -> List[str]:
-    """Accept list/dict/multiline steps and return clean step strings."""
     if isinstance(value, list):
         return [
             _normalize_text(item)
@@ -65,14 +55,12 @@ def _normalize_steps(value: Any) -> List[str]:
 
 
 def _lower_first(text: str) -> str:
-    """Lowercase only the first character for generated explanatory snippets."""
     if not text:
         return text
     return text[:1].lower() + text[1:]
 
 
 def _connector(index: int, total: int) -> str:
-    """Choose a lightweight connector for export-time fallback formatting."""
     if total > 1 and index == total:
         return "Finally"
     if index <= len(STEP_CONNECTORS):
@@ -81,7 +69,6 @@ def _connector(index: int, total: int) -> str:
 
 
 def _step_purpose(index: int, total: int) -> str:
-    """Describe why a fallback-formatted intermediate value is useful."""
     if total > 1 and index == total:
         return "this gives the requested final quantity"
     if index == 1:
@@ -90,11 +77,6 @@ def _step_purpose(index: int, total: int) -> str:
 
 
 def _make_step_explanatory(text: str, index: int, total: int) -> str:
-    """Lightly rewrite simple ``Calculate X: ...`` steps for readability.
-
-    This is only a fallback for already accepted/refined data. The dedicated
-    refine stage is responsible for higher-quality step rewriting.
-    """
     content = STEP_LABEL_RE.sub("", text, count=1).strip()
     match = CALCULATE_PREFIX_RE.match(content)
     if match is None:
@@ -118,7 +100,6 @@ def _make_step_explanatory(text: str, index: int, total: int) -> str:
 
 
 def _format_steps_for_training(steps: Sequence[str]) -> List[str]:
-    """Ensure exported steps are labelled and one-per-line."""
     formatted: List[str] = []
     total = len([step for step in steps if _normalize_text(step)])
     for index, step in enumerate(steps, start=1):
@@ -131,7 +112,6 @@ def _format_steps_for_training(steps: Sequence[str]) -> List[str]:
 
 
 def _solution_text(record: Dict[str, Any], answer: str) -> str:
-    """Build the SFT output text with the strict boxed-answer final line."""
     steps = _normalize_steps(
         record.get("steps")
         or record.get("solution_steps")
@@ -151,7 +131,6 @@ def _solution_text(record: Dict[str, Any], answer: str) -> str:
 
 
 def build_training_records(quality_records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Convert validated/refined records into instruction/input/output rows."""
     outputs: List[Dict[str, Any]] = []
     for record in quality_records:
         if "passed" in record and not record.get("passed"):
@@ -171,7 +150,6 @@ def build_training_records(quality_records: Sequence[Dict[str, Any]]) -> List[Di
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    """CLI entrypoint for ``run/build_training_data.py``."""
     parser = argparse.ArgumentParser(description="Export final training data from quality-checked records.")
     parser.add_argument("--input", required=True, help="Quality-checked JSONL path")
     parser.add_argument("--output", required=True, help="Training JSONL path")

@@ -1,13 +1,5 @@
 from __future__ import annotations
 
-"""Mathematical validation, repair, and backtracking for generated questions.
-
-This stage checks whether generated questions are solvable, have a unique
-numeric answer, and have mathematically correct candidate steps. It may repair
-solutions/questions or trigger regeneration/replan. Training-style step
-polishing is intentionally handled later by ``kb_pipeline.step_refine``.
-"""
-
 import argparse
 import ast
 import asyncio
@@ -59,11 +51,6 @@ CLAIMED_RESULT_RE = re.compile(
     r"^\s*(?P<result>[-+]?(?:\d+(?:\.\d+)?|\.\d+))"
 )
 CALCULATE_STEP_RE = re.compile(r"^\s*(?:step\s*\d+\s*[:.)-]\s*)?calculate\b", re.IGNORECASE)
-META_REASONING_STEP_RE = re.compile(
-    r"\b(?:let'?s\s+re-?read|i\s+need\s+to\s+adjust|adjust\s+the\s+numbers|"
-    r"rewrite\s+the\s+question|change\s+the\s+bonus|this\s+works)\b",
-    re.IGNORECASE,
-)
 TRAINING_UNFRIENDLY_SCENE_RE = re.compile(
     r"\b(?:"
     r"computer\s+lab|gigabytes?|software|database|server|storage|"
@@ -82,10 +69,7 @@ TRAINING_STYLE_ISSUES = {
     "template_calculate_steps",
     "training_unfriendly_scene",
 }
-
-
 def _json_message(system: str, payload: Dict[str, Any]) -> List[Dict[str, str]]:
-    """Build a compact two-message JSON-oriented chat request."""
     return [
         {"role": "system", "content": system},
         {
@@ -96,7 +80,6 @@ def _json_message(system: str, payload: Dict[str, Any]) -> List[Dict[str, str]]:
 
 
 def _blind_solve_prompt(question: str, vote_index: int) -> List[Dict[str, str]]:
-    """Prompt a verifier to solve the question without seeing candidate output."""
     return _json_message(
         (
             "You independently solve one math problem. You are a blind verifier: "
@@ -130,7 +113,6 @@ def _audit_prompt(
     target_difficulty: str,
     seed_reference: Dict[str, Any],
 ) -> List[Dict[str, str]]:
-    """Prompt the auditor to compare candidate output against blind consensus."""
     low, high = DIFFICULTY_STEP_RANGES.get(target_difficulty, (2, 4))
     return _json_message(
         (
@@ -195,7 +177,6 @@ def _repair_prompt(
     target_difficulty: str,
     seed_reference: Dict[str, Any],
 ) -> List[Dict[str, str]]:
-    """Prompt repair/regeneration according to the decision action."""
     audit = report.get("audit") or {}
     if action == "repair_solution":
         task = (
@@ -317,11 +298,6 @@ def _simple_equations(step: str) -> List[Tuple[str, float]]:
             match = ARITHMETIC_SUFFIX_RE.search(left)
             if match is None:
                 continue
-            prefix = left[: match.start()]
-            # Do not parse only the numeric tail of a symbolic equation such as
-            # ``x + 2x + 0 + 1 = 7`` as if it were ``0 + 1 = 7``.
-            if re.search(r"[+\-*/]\s*$", prefix):
-                continue
             expression = match.group("expression").strip()
         else:
             expression = left
@@ -346,12 +322,6 @@ def _simple_equations(step: str) -> List[Tuple[str, float]]:
 
 
 def precheck_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
-    """Run deterministic checks before spending model calls on validation.
-
-    Hard structural/math issues become ``issues``. Training friendliness items
-    default to ``warnings`` so validation remains focused on correctness unless
-    the environment explicitly requests hard style failures.
-    """
     question = normalize_whitespace(candidate.get("question", ""))
     steps = _normalize_steps(candidate.get("steps", []))
     answer = _normalize_answer(candidate.get("answer", ""))
@@ -380,7 +350,6 @@ def precheck_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
     calculate_max_steps = _parse_int_env("QC_TEMPLATE_CALCULATE_MAX_STEPS", 1)
     block_unfriendly_scene = _parse_bool_env("QC_BLOCK_TRAINING_UNFRIENDLY_SCENES", True)
     warn_overused_answer = _parse_bool_env("QC_WARN_OVERUSED_FINAL_ANSWERS", True)
-    enable_style_precheck = _parse_bool_env("QC_ENABLE_TRAINING_STYLE_PRECHECK", False)
     style_hard_fail = _parse_bool_env("QC_TRAINING_STYLE_HARD_FAIL", False)
     severe_question_chars = _parse_int_env("QC_SEVERE_MAX_QUESTION_CHARS", 1200)
     severe_solution_chars = _parse_int_env("QC_SEVERE_MAX_SOLUTION_CHARS", 1800)
@@ -392,25 +361,22 @@ def precheck_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
         else:
             warnings.append(issue)
 
+    if max_question_chars > 0 and len(question) > max_question_chars:
+        add_style_issue("question_too_long_for_training")
     solution_text = normalize_whitespace(" ".join(steps))
-    if enable_style_precheck:
-        if max_question_chars > 0 and len(question) > max_question_chars:
-            add_style_issue("question_too_long_for_training")
-        if max_solution_chars > 0 and len(solution_text) > max_solution_chars:
-            add_style_issue("solution_too_long_for_training")
-        if max_step_count > 0 and len(steps) > max_step_count:
-            add_style_issue("too_many_steps_for_training")
-        calculate_starts = sum(1 for step in steps if CALCULATE_STEP_RE.search(step))
-        if (
-            calculate_max_steps >= 0
-            and calculate_starts > calculate_max_steps
-            and calculate_starts / max(1, len(steps)) >= 0.4
-        ):
-            add_style_issue("template_calculate_steps")
-        if block_unfriendly_scene and TRAINING_UNFRIENDLY_SCENE_RE.search(question):
-            add_style_issue("training_unfriendly_scene")
-    if META_REASONING_STEP_RE.search(solution_text):
-        issues.append("meta_reasoning_in_steps")
+    if max_solution_chars > 0 and len(solution_text) > max_solution_chars:
+        add_style_issue("solution_too_long_for_training")
+    if max_step_count > 0 and len(steps) > max_step_count:
+        add_style_issue("too_many_steps_for_training")
+    calculate_starts = sum(1 for step in steps if CALCULATE_STEP_RE.search(step))
+    if (
+        calculate_max_steps >= 0
+        and calculate_starts > calculate_max_steps
+        and calculate_starts / max(1, len(steps)) >= 0.4
+    ):
+        add_style_issue("template_calculate_steps")
+    if block_unfriendly_scene and TRAINING_UNFRIENDLY_SCENE_RE.search(question):
+        add_style_issue("training_unfriendly_scene")
     if warn_overused_answer and answer in OVERUSED_FINAL_ANSWERS:
         warnings.append("overused_final_answer")
     if severe_question_chars > 0 and len(question) > severe_question_chars:
@@ -616,11 +582,6 @@ def summarize_blind_votes(votes: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _needs_tiebreak(votes: Sequence[Dict[str, Any]]) -> bool:
-    # If all blind-solve requests failed, a tiebreak request has no signal to
-    # break and usually repeats the same API failure. Let the retry/replan
-    # logic handle the request error instead of spending another long timeout.
-    if not votes:
-        return False
     if len(votes) < 2:
         return True
     summary = summarize_blind_votes(votes)
@@ -634,7 +595,6 @@ def decide_validation(
     audit: Optional[Dict[str, Any]],
     target_difficulty: str,
 ) -> Dict[str, Any]:
-    """Combine precheck, blind votes, and audit into one repair decision."""
     blind = summarize_blind_votes(votes)
     candidate_answer = _normalize_answer(candidate.get("answer", ""))
     reasons: List[str] = []
@@ -816,12 +776,6 @@ async def _run_validation_async(
     failed_path: Optional[Path],
     repair_history_path: Optional[Path],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Validate, repair, regenerate, and replan candidates until settled.
-
-    The loop writes checkpoints after each round so interrupted validation can
-    preserve accepted records and make failures inspectable. If repeated repair
-    attempts stall, the active plan is refreshed before generating again.
-    """
     try:
         from openai import AsyncOpenAI
     except ImportError as exc:
@@ -872,10 +826,6 @@ async def _run_validation_async(
         "QC_REPLAN_AFTER_RETRY_ERRORS",
         3,
     )
-    arithmetic_replan_after = _parse_int_env(
-        "QC_REPLAN_AFTER_ARITHMETIC_ERRORS",
-        2,
-    )
     print(
         f"[validate] config model={model} concurrency={concurrency} "
         f"blind_votes={blind_votes} tiebreak_votes={tiebreak_votes} "
@@ -883,8 +833,6 @@ async def _run_validation_async(
         f"replan_after={'disabled' if replan_after < 0 else replan_after} "
         f"retry_replan_after="
         f"{'disabled' if retry_replan_after < 0 else retry_replan_after} "
-        f"arithmetic_replan_after="
-        f"{'disabled' if arithmetic_replan_after < 0 else arithmetic_replan_after} "
         f"timeout={timeout}s progress_every={progress_every} "
         f"progress_interval={progress_interval:g}s",
         flush=True,
@@ -1086,25 +1034,16 @@ async def _run_validation_async(
             and retry_replan_after >= 0
             and retry_failure_count >= max(1, retry_replan_after)
         )
-        force_arithmetic_replan = (
-            action == "repair_solution"
-            and report.get("error_type") == "arithmetic_error"
-            and arithmetic_replan_after >= 0
-            and quality_failure_count >= max(1, arithmetic_replan_after)
-        )
         if (
             repeated_count >= 1
             or force_stubborn_replan
             or force_retry_replan
-            or force_arithmetic_replan
         ):
             action = "regenerate_question"
         repair_plan = plan
         if action == "regenerate_question":
             if force_retry_replan:
                 replan_reason = "validation_response_failure"
-            elif force_arithmetic_replan:
-                replan_reason = "repeated_arithmetic_error"
             elif force_stubborn_replan:
                 replan_reason = "stubborn_validation"
             else:
@@ -1137,7 +1076,6 @@ async def _run_validation_async(
                     "repair_plan": repair_plan,
                     "forced_replan": force_stubborn_replan,
                     "forced_retry_replan": force_retry_replan,
-                    "forced_arithmetic_replan": force_arithmetic_replan,
                     "quality_failure_count": quality_failure_count,
                     "retry_failure_count": retry_failure_count,
                     "replan_reason": replan_reason,
@@ -1157,7 +1095,6 @@ async def _run_validation_async(
                 "repair_plan": repair_plan,
                 "forced_replan": force_stubborn_replan,
                 "forced_retry_replan": force_retry_replan,
-                "forced_arithmetic_replan": force_arithmetic_replan,
                 "quality_failure_count": quality_failure_count,
                 "retry_failure_count": retry_failure_count,
                 "replan_reason": replan_reason,
@@ -1170,7 +1107,6 @@ async def _run_validation_async(
                 "repair_plan": repair_plan,
                 "forced_replan": force_stubborn_replan,
                 "forced_retry_replan": force_retry_replan,
-                "forced_arithmetic_replan": force_arithmetic_replan,
                 "quality_failure_count": quality_failure_count,
                 "retry_failure_count": retry_failure_count,
                 "replan_reason": replan_reason,
@@ -1357,18 +1293,11 @@ async def _run_validation_async(
                     item: Dict[str, Any],
                     report: Dict[str, Any],
                 ) -> bool:
-                    next_retry_count = int(item.get("retry_failures") or 0) + 1
-                    # Primary path: per-item retry failures should accumulate.
-                    # Failsafe path: if a stale/older run somehow keeps a single
-                    # request-error item cycling without carrying retry_failures,
-                    # the global round still prevents endless blind-solve loops.
                     return (
                         report.get("repair_action") == "retry_validation"
                         and retry_replan_after >= 0
-                        and (
-                            next_retry_count >= max(1, retry_replan_after)
-                            or round_index + 1 >= max(1, retry_replan_after)
-                        )
+                        and int(item.get("retry_failures") or 0) + 1
+                        >= max(1, retry_replan_after)
                     )
 
                 repair_tasks = [
@@ -1601,7 +1530,6 @@ def validate_generated_questions(
     failed_path: Optional[Path] = None,
     repair_history_path: Optional[Path] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Synchronous wrapper used by the validation stage script."""
     return asyncio.run(
         _run_validation_async(
             candidates,
@@ -1662,7 +1590,6 @@ def validate_generated_questions(
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    """CLI entrypoint for ``run/06_validate_generated.sh``."""
     parser = argparse.ArgumentParser(
         description="Blind-solve, audit, repair, and revalidate generated math problems."
     )

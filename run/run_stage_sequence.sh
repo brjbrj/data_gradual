@@ -20,13 +20,8 @@ export STAGE_SEQUENCE_VLLM_MODE="${STAGE_VLLM_MODE}"
 if [[ "${STAGE_VLLM_MODE}" == "managed" ]]; then
   export STAGE_VLLM_STOP_ON_EXIT="${STAGE_VLLM_STOP_ON_EXIT:-0}"
   STAGE_SEQUENCE_PID_FILE="${VLLM_PID_FILE:-${OUTPUT_DIR:-${ROOT_DIR}/outputs}/runtime/vllm/vllm.pid}"
-  STAGE_SEQUENCE_API_PORT="$(resolve_vllm_api_port || true)"
   cleanup_sequence_vllm() {
-    STOP_ARGS=(--pid-file "${STAGE_SEQUENCE_PID_FILE}")
-    if [[ -n "${STAGE_SEQUENCE_API_PORT}" ]]; then
-      STOP_ARGS+=(--port "${STAGE_SEQUENCE_API_PORT}")
-    fi
-    bash "${ROOT_DIR}/run/stop_vllm.sh" "${STOP_ARGS[@]}" >/dev/null 2>&1 || true
+    "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${STAGE_SEQUENCE_PID_FILE}" >/dev/null 2>&1 || true
   }
   trap cleanup_sequence_vllm EXIT INT TERM
 fi
@@ -42,13 +37,6 @@ else
   echo "[stage-sequence] external mode: start/switch vLLM before each model-dependent stage."
 fi
 
-if [[ "${RUN_DATA_PREPARE:-1}" != "0" ]]; then
-  bash "${ROOT_DIR}/run/00_prepare_data.sh" "${DATASET_ARG}"
-  PREPARED_INPUT="${PREPARED_INPUT_PATH:-${PREPARED_DIR:-${OUTPUT_DIR:-${ROOT_DIR}/outputs}/prepared/${DATASET_ARG}}/${DATASET_ARG}.prepared.jsonl}"
-  export INPUT_PATH="${PREPARED_INPUT}"
-  echo "[stage-sequence] prepared input=${INPUT_PATH}"
-fi
-
 bash "${ROOT_DIR}/run/01_build_kb.sh" "${DATASET_ARG}"
 bash "${ROOT_DIR}/run/02_answer_seed.sh" "${DATASET_ARG}"
 bash "${ROOT_DIR}/run/03_score_seed.sh" "${DATASET_ARG}"
@@ -56,11 +44,8 @@ bash "${ROOT_DIR}/run/04_build_synthesis_plan.sh" "${DATASET_ARG}"
 bash "${ROOT_DIR}/run/05_generate_questions.sh" "${DATASET_ARG}"
 if [[ "${RUN_VALIDATION:-1}" != "0" ]]; then
   bash "${ROOT_DIR}/run/06_validate_generated.sh" "${DATASET_ARG}"
-  # Optional final wording pass: keep validated math fixed, polish only steps
-  # for training friendliness. Disable with RUN_STEP_REFINEMENT=0.
   if [[ "${RUN_STEP_REFINEMENT:-1}" != "0" ]]; then
     bash "${ROOT_DIR}/run/07_refine_solution_steps.sh" "${DATASET_ARG}"
   fi
-  # Export automatically uses refined.jsonl when present, otherwise validated.jsonl.
   bash "${ROOT_DIR}/run/08_export_training_data.sh" "${DATASET_ARG}"
 fi

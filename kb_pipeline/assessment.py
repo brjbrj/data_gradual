@@ -20,8 +20,6 @@ from .utils import normalize_whitespace, read_json, read_jsonl, safe_json_from_t
 
 
 NUMBER_RE = re.compile(r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?")
-BOXED_RE = re.compile(r"\\boxed\{([^{}]+)\}")
-CHOICE_RE = re.compile(r"\b([A-E])\b")
 FINAL_MARK_RE = re.compile(r"####\s*(.+)$")
 SENTENCE_SPLIT_RE = re.compile(r"[.?!;]\s+|\n+")
 
@@ -98,15 +96,6 @@ def _normalize_number_token(text: str) -> str:
     return cleaned
 
 
-def _answer_extract_mode() -> str:
-    return str(os.environ.get("ANSWER_EXTRACT_MODE", "number") or "number").strip().lower()
-
-
-def _normalize_choice_token(text: str) -> str:
-    match = re.search(r"\b([A-E])\b", str(text or ""), flags=re.IGNORECASE)
-    return match.group(1).upper() if match else normalize_whitespace(text).upper()
-
-
 def _extract_final_answer(text: str) -> str:
     if not text:
         return ""
@@ -116,58 +105,23 @@ def _extract_final_answer(text: str) -> str:
             for key in ("final_answer", "answer"):
                 value = parsed.get(key)
                 if value is not None:
-                    extracted = normalize_whitespace(str(value))
-                    return _normalize_choice_token(extracted) if _answer_extract_mode() == "choice" else extracted
+                    return normalize_whitespace(str(value))
         if isinstance(parsed, list) and parsed:
             last_item = parsed[-1]
             if isinstance(last_item, dict):
                 for key in ("final_answer", "answer"):
                     value = last_item.get(key)
                     if value is not None:
-                        extracted = normalize_whitespace(str(value))
-                        return _normalize_choice_token(extracted) if _answer_extract_mode() == "choice" else extracted
+                        return normalize_whitespace(str(value))
     except Exception:
         pass
-    boxed = BOXED_RE.findall(text)
-    if boxed:
-        extracted = normalize_whitespace(boxed[-1])
-        return _normalize_choice_token(extracted) if _answer_extract_mode() == "choice" else extracted
     match = FINAL_MARK_RE.search(text)
     if match:
-        extracted = normalize_whitespace(match.group(1))
-        return _normalize_choice_token(extracted) if _answer_extract_mode() == "choice" else extracted
-    if _answer_extract_mode() == "choice":
-        answer_match = re.search(
-            r"(?:the\s+answer\s+is|answer)\s*[:：]?\s*(?:\$?\\boxed\{)?\s*([A-E])\b",
-            text,
-            flags=re.IGNORECASE,
-        )
-        if answer_match:
-            return answer_match.group(1).upper()
-        choice = CHOICE_RE.findall(text)
-        if choice:
-            return choice[-1].upper()
-        return _normalize_choice_token(text.splitlines()[-1] if text.splitlines() else text)
+        return normalize_whitespace(match.group(1))
     numbers = NUMBER_RE.findall(text.replace(",", ""))
     if numbers:
         return normalize_whitespace(numbers[-1])
     return normalize_whitespace(text.splitlines()[-1] if text.splitlines() else text)
-
-
-def _extract_plain_steps(raw_output: str) -> List[str]:
-    raw = str(raw_output or "").strip()
-    if not raw:
-        return []
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    kept: List[str] = []
-    for line in lines:
-        lowered = line.lower()
-        if "####" in line:
-            break
-        if "the answer is" in lowered or "\\boxed" in line:
-            break
-        kept.append(normalize_whitespace(line))
-    return [line for line in kept if line]
 
 
 def _normalize_steps(steps: Any) -> List[str]:
@@ -264,8 +218,6 @@ def _parse_victim_output(raw_output: str) -> Dict[str, Any]:
     steps = _normalize_steps(parsed.get("steps"))
     if not steps:
         steps = _extract_steps_from_malformed_json(raw_output)
-    if not steps:
-        steps = _extract_plain_steps(raw_output)
     final_answer = normalize_whitespace(str(parsed.get("final_answer", parsed.get("answer", "")))) if parsed else ""
     if not final_answer:
         final_answer = _extract_keyed_string(raw_output, ("final_answer", "answer"))
@@ -346,8 +298,6 @@ def _numeric_match(a: str, b: str) -> bool:
 def _is_correct_answer(candidate: str, reference: str) -> bool:
     if not candidate or not reference:
         return False
-    if _answer_extract_mode() == "choice":
-        return _normalize_choice_token(candidate) == _normalize_choice_token(reference)
     if _numeric_match(candidate, reference):
         return True
     cand_norm = _normalize_number_token(candidate)
@@ -1732,11 +1682,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--synthesis-min-per-seed", type=int, required=False)
     parser.add_argument("--synthesis-max-per-seed", type=int, required=False)
     parser.add_argument("--synthesis-balance-lambda", type=float, required=False)
-    parser.add_argument("--synthesis-allocation-policy", required=False)
-    parser.add_argument("--synthesis-active-threshold", type=int, required=False)
-    parser.add_argument("--synthesis-marginal-alpha", type=float, required=False)
-    parser.add_argument("--synthesis-threshold-boost", type=float, required=False)
-    parser.add_argument("--synthesis-cold-start-factor", type=float, required=False)
     args = parser.parse_args(argv)
 
     input_path = Path(args.input)
@@ -1813,11 +1758,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         n_min = args.synthesis_min_per_seed if args.synthesis_min_per_seed is not None else _parse_int_env("SYNTHESIS_MIN_PER_SEED", default=10)
         n_max = args.synthesis_max_per_seed if args.synthesis_max_per_seed is not None else _parse_int_env("SYNTHESIS_MAX_PER_SEED", default=50)
         lambda_balance = args.synthesis_balance_lambda if args.synthesis_balance_lambda is not None else _parse_float_env("SYNTHESIS_BALANCE_LAMBDA", default=0.3)
-        allocation_policy = args.synthesis_allocation_policy or os.environ.get("SYNTHESIS_ALLOCATION_POLICY", "legacy")
-        active_threshold = args.synthesis_active_threshold if args.synthesis_active_threshold is not None else _parse_int_env("SYNTHESIS_ACTIVE_THRESHOLD", default=0)
-        marginal_alpha = args.synthesis_marginal_alpha if args.synthesis_marginal_alpha is not None else _parse_float_env("SYNTHESIS_MARGINAL_ALPHA", default=0.7)
-        threshold_boost = args.synthesis_threshold_boost if args.synthesis_threshold_boost is not None else _parse_float_env("SYNTHESIS_THRESHOLD_BOOST", default=2.0)
-        cold_start_factor = args.synthesis_cold_start_factor if args.synthesis_cold_start_factor is not None else _parse_float_env("SYNTHESIS_COLD_START_FACTOR", default=0.0)
         mastery_records = distribute_mastery_records(
             mastery_records,
             source_lookup,
@@ -1825,11 +1765,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             n_min=n_min,
             n_max=n_max,
             lambda_balance=lambda_balance,
-            allocation_policy=allocation_policy,
-            active_threshold=active_threshold,
-            marginal_alpha=marginal_alpha,
-            threshold_boost=threshold_boost,
-            cold_start_factor=cold_start_factor,
         )
         write_jsonl(mastery_record_path, mastery_records)
         write_json(mastery_path, mastery_records)

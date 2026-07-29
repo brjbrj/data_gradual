@@ -30,11 +30,6 @@ stage_init() {
 
   OUTPUT_DIR="${OUTPUT_DIR:-${STAGE_ROOT_DIR}/outputs}"
   INPUT_PATH="${INPUT_PATH:-${STAGE_ROOT_DIR}/data/${DATASET_NAME}.jsonl}"
-  RAW_INPUT_PATH="${RAW_INPUT_PATH:-${INPUT_PATH}}"
-  PREPARED_DIR="${PREPARED_DIR:-${OUTPUT_DIR}/prepared/${DATASET_NAME}}"
-  PREPARED_INPUT_PATH="${PREPARED_INPUT_PATH:-${PREPARED_DIR}/${DATASET_NAME}.prepared.jsonl}"
-  PREPARED_FILTERED_PATH="${PREPARED_FILTERED_PATH:-${PREPARED_DIR}/${DATASET_NAME}.filtered.jsonl}"
-  PREPARED_SUMMARY_PATH="${PREPARED_SUMMARY_PATH:-${PREPARED_DIR}/${DATASET_NAME}.summary.json}"
   KB_DIR="${KB_DIR:-${OUTPUT_DIR}/kb/${DATASET_NAME}}"
   ANALYSIS_DIR="${ANALYSIS_DIR:-${OUTPUT_DIR}/analysis/${DATASET_NAME}}"
   PLANNING_DIR="${PLANNING_DIR:-${OUTPUT_DIR}/planning/${DATASET_NAME}}"
@@ -56,9 +51,6 @@ stage_init() {
   VALIDATION_REPORTS_PATH="${VALIDATION_REPORTS_PATH:-${PIPELINE_DIR}/validation_reports.jsonl}"
   VALIDATION_FAILED_PATH="${VALIDATION_FAILED_PATH:-${PIPELINE_DIR}/validation.failed.jsonl}"
   REPAIR_HISTORY_PATH="${REPAIR_HISTORY_PATH:-${PIPELINE_DIR}/repair_history.jsonl}"
-  # Step refinement sits between validation and SFT export. It is separate from
-  # validation so correctness checks stay math-focused while final training data
-  # can still receive clearer, dependency-aware reasoning steps.
   REFINED_OUTPUT_PATH="${REFINED_OUTPUT_PATH:-${PIPELINE_DIR}/refined.jsonl}"
   REFINE_RAW_OUTPUT_PATH="${REFINE_RAW_OUTPUT_PATH:-${PIPELINE_DIR}/refine.raw.jsonl}"
   REFINE_FAILED_PATH="${REFINE_FAILED_PATH:-${PIPELINE_DIR}/refine.failed.jsonl}"
@@ -66,8 +58,7 @@ stage_init() {
   TRAIN_OUTPUT_PATH="${TRAIN_OUTPUT_PATH:-${PIPELINE_DIR}/train.jsonl}"
   TRAIN_SUMMARY_PATH="${TRAIN_SUMMARY_PATH:-${PIPELINE_DIR}/train.summary.json}"
 
-  export OUTPUT_DIR INPUT_PATH RAW_INPUT_PATH PREPARED_DIR PREPARED_INPUT_PATH PREPARED_FILTERED_PATH PREPARED_SUMMARY_PATH
-  export KB_DIR ANALYSIS_DIR PLANNING_DIR PIPELINE_DIR
+  export OUTPUT_DIR INPUT_PATH KB_DIR ANALYSIS_DIR PLANNING_DIR PIPELINE_DIR
   export KB_RECORDS_PATH KB_ENTITIES_PATH VICTIM_ANSWER_PATH VICTIM_ANSWER_RAW_PATH
   export STEP_EVALUATION_PATH MASTERY_PATH MASTERY_JSON_PATH PLAN_PATH PLAN_SUMMARY_PATH
   export GENERATED_OUTPUT_PATH RAW_OUTPUT_PATH FAILED_OUTPUT_PATH
@@ -75,7 +66,7 @@ stage_init() {
   export REFINED_OUTPUT_PATH REFINE_RAW_OUTPUT_PATH REFINE_FAILED_PATH REFINE_SUMMARY_PATH
   export TRAIN_OUTPUT_PATH TRAIN_SUMMARY_PATH
 
-  mkdir -p "${PREPARED_DIR}" "${KB_DIR}" "${ANALYSIS_DIR}" "${PLANNING_DIR}" "${PIPELINE_DIR}"
+  mkdir -p "${KB_DIR}" "${ANALYSIS_DIR}" "${PLANNING_DIR}" "${PIPELINE_DIR}"
   STAGE_REMAINING_ARGS=("$@")
 }
 
@@ -148,11 +139,7 @@ request = urllib.request.Request(
     method="GET",
 )
 try:
-    # vLLM readiness probes are always local service checks. Some clusters set
-    # HTTP(S)_PROXY globally; urllib would then send 127.0.0.1 traffic to Squid
-    # and return a long HTML 503 page instead of probing the local API server.
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(request, timeout=5) as response:
+    with urllib.request.urlopen(request, timeout=5) as response:
         payload = json.loads(response.read().decode("utf-8"))
 except urllib.error.HTTPError as exc:
     try:
@@ -219,7 +206,7 @@ stage_ensure_vllm() {
     return 0
   fi
 
-  local mode="${STAGE_VLLM_MODE:-${VLLM_RUNTIME_MODE:-external}}"
+  local mode="${STAGE_VLLM_MODE:-external}"
   local timeout
   local poll
   if [[ "${mode}" == "managed" ]]; then
@@ -238,25 +225,13 @@ stage_ensure_vllm() {
   if [[ "${mode}" == "managed" ]]; then
     local pid_file="${VLLM_PID_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.pid}"
     local log_file="${VLLM_LOG_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.log}"
-    local api_port
-    api_port="$(resolve_vllm_api_port || true)"
-    if stage_check_served_model "${expected}"; then
-      stage_log "reusing managed vLLM for ${label}: ${expected}"
-      return 0
-    fi
-    stage_log "managed vLLM will stop the current non-matching or unhealthy service before starting ${label}"
-    STOP_ARGS=(--pid-file "${pid_file}")
-    if [[ -n "${api_port}" ]]; then
-      STOP_ARGS+=(--port "${api_port}")
-    fi
-    bash "${STAGE_ROOT_DIR}/run/stop_vllm.sh" "${STOP_ARGS[@]}" >/dev/null 2>&1 || true
     stage_log "starting managed vLLM for ${label}: ${expected}"
-    bash "${STAGE_ROOT_DIR}/run/start_vllm.sh" \
+    "${STAGE_ROOT_DIR}/run/start_vllm.sh" \
       --background \
       --pid-file "${pid_file}" \
       --log-file "${log_file}" \
       --model "${expected}" >/dev/null
-    if [[ "${STAGE_VLLM_STOP_ON_EXIT:-1}" == "1" ]]; then
+    if [[ "${STAGE_VLLM_STOP_ON_EXIT:-0}" == "1" ]]; then
       STAGE_MANAGED_PID_FILE="${pid_file}"
       export STAGE_MANAGED_PID_FILE
       trap stage_cleanup_managed_vllm EXIT
@@ -295,12 +270,6 @@ stage_require_file() {
 
 stage_cleanup_managed_vllm() {
   if [[ -n "${STAGE_MANAGED_PID_FILE:-}" ]]; then
-    STOP_ARGS=(--pid-file "${STAGE_MANAGED_PID_FILE}")
-    local api_port
-    api_port="$(resolve_vllm_api_port || true)"
-    if [[ -n "${api_port}" ]]; then
-      STOP_ARGS+=(--port "${api_port}")
-    fi
-    bash "${STAGE_ROOT_DIR}/run/stop_vllm.sh" "${STOP_ARGS[@]}" >/dev/null 2>&1 || true
+    "${STAGE_ROOT_DIR}/run/stop_vllm.sh" --pid-file "${STAGE_MANAGED_PID_FILE}" >/dev/null 2>&1 || true
   fi
 }

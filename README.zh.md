@@ -1,4 +1,4 @@
-﻿# data_gradual_new
+# data_gradual_new
 
 这是一个独立的渐进式数学数据合成项目。项目保留了原始的 mastery 计算、合成数量分配和相对难度分配逻辑，并在当前目录中实现了后续的计划构建、题目生成、盲解验证、定向修复和训练数据导出流程。
 
@@ -6,22 +6,21 @@
 
 ## 当前完整流程
 
-1. 先浏览并准备源数据。GSM8K 等原始格式会转成项目标准字段，缺失的 `question_type` 会由分类模型补齐。
-2. 根据准备好的标准数据构建知识库 KB。
-3. 使用被测模型仅根据题目内容回答每道种子题 `N` 次。
-4. 保存被测模型输出的推理步骤和最终答案。
-5. 与标准答案做数值比对，并对被测模型的推理步骤进行评分。
-6. 根据正确率和步骤质量计算每道种子题的 mastery。
-7. 根据 mastery 为每道种子题分配合成数量和五级相对难度。
-8. 根据 KB、mastery 和多样性策略构建合成计划。
-9. 异步并发生成新题、步骤和答案。
-10. 对生成题做程序预检查。
-11. 验证模型对题目进行独立盲解，必要时追加 tie-break vote。
-12. 审计候选答案、步骤、可解性、唯一性和相对难度。
-13. 根据错误类型定向修复，并进入下一轮盲解和审计。
-14. 输出通过验证的简洁数据。
-15. 可选地只改写 `steps`，把正确但机械的步骤改成更适合训练的依赖关系推理链。
-16. 导出训练格式 JSONL。
+1. 格式化原始数学题数据，并构建知识库 KB。
+2. 使用被测模型仅根据题目内容回答每道种子题 `N` 次。
+3. 保存被测模型输出的推理步骤和最终答案。
+4. 与标准答案做数值比对，并对被测模型的推理步骤进行评分。
+5. 根据正确率和步骤质量计算每道种子题的 mastery。
+6. 根据 mastery 为每道种子题分配合成数量和五级相对难度。
+7. 根据 KB、mastery 和多样性策略构建合成计划。
+8. 异步并发生成新题、步骤和答案。
+9. 对生成题做程序预检查。
+10. 验证模型对题目进行独立盲解，必要时追加 tie-break vote。
+11. 审计候选答案、步骤、可解性、唯一性和相对难度。
+12. 根据错误类型定向修复，并进入下一轮盲解和审计。
+13. 输出通过验证的简洁数据。
+14. 可选地只改写 `steps`，把正确但机械的步骤改成更适合训练的依赖关系推理链。
+15. 导出训练格式 JSONL。
 
 ## 推荐运行方式：分步执行
 
@@ -32,12 +31,11 @@ cd /jizhicfs/hymiezhao/lpc/repos/brj/data_gradual_new
 export STAGE_VLLM_MODE=external
 ```
 
-阶段脚本会自动读取 `config/pipeline.env`，并使用其中配置的 `PIPELINE_PYTHON` 或 pipeline conda 环境。默认情况下，阶段脚本会跟随 `config/pipeline.env` 中的 `VLLM_RUNTIME_MODE`；如果想强制外部手动管理 vLLM，可设置 `STAGE_VLLM_MODE=external`，如果想强制脚本托管启动/切换 vLLM，可设置 `STAGE_VLLM_MODE=managed`。
+阶段脚本会自动读取 `config/pipeline.env`，并使用其中配置的 `PIPELINE_PYTHON` 或 pipeline conda 环境。默认情况下，阶段脚本不会启动、切换或关闭 vLLM；你需要在外部提前启动好当前阶段所需模型。
 
 ### 阶段命令
 
 ```bash
-bash run/00_prepare_data.sh gsm8k
 bash run/01_build_kb.sh gsm8k
 bash run/02_answer_seed.sh gsm8k
 bash run/03_score_seed.sh gsm8k
@@ -52,7 +50,6 @@ bash run/08_export_training_data.sh gsm8k
 
 | 阶段 | vLLM 要求 | 主要输出 |
 | --- | --- | --- |
-| `00_prepare_data.sh` | 只有缺少 `question_type` 时才需要 `CLASSIFY_MODEL` | `outputs/prepared/<dataset>/<dataset>.prepared.jsonl` |
 | `01_build_kb.sh` | 不需要 vLLM | `outputs/kb/<dataset>/records.jsonl` |
 | `02_answer_seed.sh` | 需要外部服务当前提供 `VICTIM_MODEL` | `outputs/analysis/<dataset>/victim_answers.raw.jsonl` |
 | `03_score_seed.sh` | 需要外部服务当前提供 `STEP_MODEL` | `outputs/analysis/<dataset>/mastery_records.jsonl` |
@@ -63,33 +60,6 @@ bash run/08_export_training_data.sh gsm8k
 | `08_export_training_data.sh` | 不需要 vLLM | `outputs/pipeline/<dataset>/train.jsonl` |
 
 例如：如果第 2 阶段使用 Llama，第 3、5、6 阶段使用 Qwen，那么你需要在进入相应阶段前，手动启动或切换外部 vLLM 服务到对应模型。
-
-### 单独测试前置处理
-
-如果只想测试原始数据格式化和题型分类，不运行后续 pipeline，可以直接运行：
-
-```bash
-cd /root/brjverl/data_gradual_new
-STAGE_FORCE=1 SAMPLE_LIMIT=5 \
-RAW_INPUT_PATH=/root/brjverl/datas/gsm8k_2.jsonl \
-PREPARED_INPUT_PATH=/tmp/gsm8k_2.prepared.test.jsonl \
-bash run/00_prepare_data.sh gsm8k_2
-```
-
-查看输出：
-
-```bash
-head -n 5 /tmp/gsm8k_2.prepared.test.jsonl
-```
-
-该阶段会先浏览输入数据 schema。如果记录已经包含 `task_id`、`question`、`answer`、`solution_steps` 和 `proficiency_score`，会自然跳过 format；如果所有记录都已经有非空 `question_type`，会自然跳过分类，并且不会检查或启动 vLLM。若只想测试格式化、不调用分类模型：
-
-```bash
-STAGE_FORCE=1 PREPARE_CLASSIFY=0 SAMPLE_LIMIT=5 \
-RAW_INPUT_PATH=/root/brjverl/datas/gsm8k_2.jsonl \
-PREPARED_INPUT_PATH=/tmp/gsm8k_2.formatted.test.jsonl \
-bash run/00_prepare_data.sh gsm8k_2
-```
 
 ### 外部 vLLM 检查方式
 
@@ -133,7 +103,6 @@ STAGE_FORCE=1 bash run/05_generate_questions.sh gsm8k
 
 | 阶段 | 恢复行为 |
 | --- | --- |
-| `00_prepare_data.sh` | 如果 prepared input 已存在则跳过；设置 `STAGE_FORCE=1` 可重建。 |
 | `01_build_kb.sh` | 如果 KB records 和 entities 已存在，则跳过。 |
 | `02_answer_seed.sh` | 从 `victim_answers.raw.jsonl` 恢复；每 `ANSWER_CHECKPOINT_EVERY` 条答案保存一次。 |
 | `03_score_seed.sh` | 从 `step_evaluations.jsonl.partial` 恢复；评分完成一条就追加保存。 |
@@ -167,10 +136,10 @@ GEN_RESUME=0 bash run/05_generate_questions.sh gsm8k --no-resume
 STAGE_VLLM_MODE=managed bash run/05_generate_questions.sh gsm8k
 ```
 
-单独运行某个阶段时，managed 模式会先检查已有 vLLM：如果模型匹配，就直接复用并保留；如果服务不可用或模型不匹配，就先关闭当前 vLLM，再启动该阶段需要的模型。凡是由这个单阶段脚本启动或切换出来的 vLLM，阶段结束会默认自动关闭。若你想保留模型给下一条手动 stage 命令复用，可以显式关闭这个清理行为：
+如果希望阶段结束时自动关闭这个 managed vLLM：
 
 ```bash
-STAGE_VLLM_MODE=managed STAGE_VLLM_STOP_ON_EXIT=0 bash run/05_generate_questions.sh gsm8k
+STAGE_VLLM_MODE=managed STAGE_VLLM_STOP_ON_EXIT=1 bash run/05_generate_questions.sh gsm8k
 ```
 
 ## 旧命令兼容
@@ -192,68 +161,6 @@ STAGE_VLLM_MODE=external bash run/run_full_pipeline.sh gsm8k
 ```
 
 外部模式下，如果不同阶段使用不同模型，需要你在对应阶段前手动切换 vLLM。
-
-## 独立模型评测
-
-模型准确率评测不放入主合成流程，代码独立放在 `evaluation/` 目录下，需要手动执行。评测脚本会先对验证集做评测专用预处理，例如从 GSM8K 原始答案中提取 `#### 72` 作为标准答案；然后严格使用 `evaluation/prompt/generate.json` 让模型回答；最后输出 predictions、JSON 报告和 Markdown 报告，包含 sample accuracy 和 pass@k。
-
-日常修改评测参数时，优先编辑 `evaluation/eval.env`，例如模型路径、输入路径、输出目录、温度、top_p、并发数和每题回答次数。`evaluation/eval.example.env` 记录了可用配置项。
-设置 `EVAL_MAX_RETRIES=-1` 时，评测生成回答请求会无限重试。
-
-```bash
-cd /root/brjverl/data_gradual_new
-bash evaluation/run_model_eval.sh gsm8k_2
-```
-
-如果每题要生成多次回答，把 `EVAL_N_ANSWERS` 调大即可，报告会给出 `pass@1 ... pass@k`：
-
-```bash
-EVAL_N_ANSWERS=5 EVAL_TEMPERATURE=0.7 EVAL_TOP_P=0.95 bash evaluation/run_model_eval.sh gsm8k_2
-```
-
-答案抽取模式目前是显式枚举的：
-
-| 变量 | 可选值 | 适用场景 |
-| --- | --- | --- |
-| `EVAL_ANSWER_EXTRACT_MODE=number` | `number` | GSM8K 这类数值答案数据集。优先抽取 boxed/`####` 标记答案，否则抽取最后一个数字；比较时会忽略逗号、空格、`$`、`%`，再用浮点容差判断。 |
-| `EVAL_ANSWER_EXTRACT_MODE=choice` | `choice` | `agieval_eng_qa` 这类选择题数据集。抽取并归一化 `A`-`E` 选项，小写输出也会转成大写。 |
-
-主流程 answer 阶段对应的变量是 `ANSWER_EXTRACT_MODE`，可选值相同。例如：
-
-```bash
-# GSM8K 数值答案
-EVAL_ANSWER_EXTRACT_MODE=number
-ANSWER_EXTRACT_MODE=number
-
-# AGIEval 选择题答案
-EVAL_ANSWER_EXTRACT_MODE=choice
-ANSWER_EXTRACT_MODE=choice
-```
-
-前置数据处理里的分类也支持 `CLASSIFY_MAX_RETRIES=-1` 无限重试。如果模型输出不在预设类别中，分类器会带着允许类别列表要求模型重新分类。为了避免最后少量样本看起来像“卡住”，可以用 `CLASSIFY_RETRY_LOG_EVERY` 让程序定期打印正在重试的 `task_id`、重试次数、失败原因和最近一次模型输出摘要；设为 `0` 可以关闭逐题重试日志。
-
-```bash
-CLASSIFY_MAX_RETRIES=-1
-CLASSIFY_RETRY_LOG_EVERY=10
-CLASSIFY_RETRY_LOG_SAMPLE_CHARS=240
-CLASSIFY_CHECKPOINT_EVERY=1000
-CLASSIFY_TIMEOUT=120
-CLASSIFY_REQUEST_MAX_RETRIES=0
-CLASSIFY_HEARTBEAT_INTERVAL=60
-PREPARE_FILTER_QUESTION_TYPES=Other / Non-Mathematical
-EVAL_FILTER_QUESTION_TYPES=Other / Non-Mathematical
-```
-
-`CLASSIFY_CHECKPOINT_EVERY` 会定期把已经完成的分类写入 prepared JSONL。如果无限重试任务被中断，重新执行同一个 prepare 命令时，已有 `question_type` 的记录会自动跳过。
-`CLASSIFY_TIMEOUT` 是分类专用的 HTTP 超时，避免单个 vLLM 请求在内部等太久；`CLASSIFY_REQUEST_MAX_RETRIES=0` 表示不让底层客户端悄悄重试，而是把重试交给外层分类逻辑，这样日志可见。`CLASSIFY_HEARTBEAT_INTERVAL` 会在长时间没有新样本完成时打印仍在请求中的 task。
-
-默认分类提示词现在包含 `Other / Non-Mathematical`，用于承接非数学选择题。`PREPARE_FILTER_QUESTION_TYPES` 会把这些记录从 prepared 主数据中移除，并额外写入：
-
-```text
-outputs/prepared/<dataset>/<dataset>.filtered.jsonl
-```
-
-评测脚本也支持 `EVAL_FILTER_QUESTION_TYPES`，但前提是评测输入记录里已经有 `question_type`。如果评测直接读取没有 `question_type` 的原始验证集，需要先跑 prepare，再用 prepared JSONL 作为评测输入，才能按类别过滤。
 
 ## 主要配置文件
 
@@ -283,18 +190,6 @@ STEP_MODEL=/path/to/Qwen3.6-27B/
 GEN_MODEL=/path/to/Qwen3.6-27B/
 QC_MODEL=/path/to/Qwen3.6-27B/
 REPAIR_MODEL=/path/to/Qwen3.6-27B/
-```
-
-前置处理配置示例：
-
-```bash
-RUN_DATA_PREPARE=1
-DATA_FORMAT_TEMPLATE=gsm8k
-PREPARE_CLASSIFY=1
-CLASSIFY_MODEL=/path/to/Qwen3.6-27B/
-CLASSIFY_BASE_URL=http://127.0.0.1:8911/v1
-CLASSIFY_API_KEY=EMPTY
-CLASSIFY_CONCURRENCY=16
 ```
 
 生成配置示例：
@@ -333,7 +228,6 @@ QC_MAX_QUESTION_CHARS=700
 QC_MAX_SOLUTION_CHARS=900
 QC_MAX_STEP_COUNT=10
 QC_TEMPLATE_CALCULATE_MAX_STEPS=1
-QC_ENABLE_TRAINING_STYLE_PRECHECK=0
 QC_BLOCK_TRAINING_UNFRIENDLY_SCENES=1
 QC_WARN_OVERUSED_FINAL_ANSWERS=1
 QC_TRAINING_STYLE_HARD_FAIL=0
@@ -344,9 +238,8 @@ QC_DIFFICULTY_TOLERANCE=1
 QC_REQUIRE_EXACT_DIFFICULTY=0
 RUN_STEP_REFINEMENT=1
 REFINE_CONCURRENCY=128
-REFINE_MAX_ROUNDS=-1
+REFINE_MAX_ROUNDS=3
 REFINE_MAX_TOKENS=900
-REFINE_FORCE_REWRITE=0
 REFINE_CHECKPOINT_EVERY=50
 ```
 
@@ -354,55 +247,16 @@ REFINE_CHECKPOINT_EVERY=50
 
 - `PLAN_USE_FULL_SCENE_DOMAINS=0` 时，plan 阶段默认使用更接近 GSM8K 的日常场景池，如学校、购物、家务、运动、食物、金钱、时间、距离和社区活动。
 - `PLAN_USE_FULL_SCENE_DOMAINS=1` 时，恢复完整场景池，允许仓储、实验室、软件、太阳能、水站、机场等技术/工程化场景。
-- `QC_ENABLE_TRAINING_STYLE_PRECHECK=0` 时，validate 默认只关注数学正确性、答案唯一性、答案正确性和格式/严重失控问题；步骤表达质量交给 refine。
-- `QC_ENABLE_TRAINING_STYLE_PRECHECK=1` 时，`QC_MAX_QUESTION_CHARS`、`QC_MAX_SOLUTION_CHARS`、`QC_MAX_STEP_COUNT`、`QC_TEMPLATE_CALCULATE_MAX_STEPS` 和 `QC_BLOCK_TRAINING_UNFRIENDLY_SCENES` 会恢复为训练风格 warning/硬失败规则。
+- `QC_MAX_QUESTION_CHARS`、`QC_MAX_SOLUTION_CHARS`、`QC_MAX_STEP_COUNT` 用于拦截过长、过啰嗦、步骤过多的样本。
+- `QC_TEMPLATE_CALCULATE_MAX_STEPS` 用于拦截大量步骤都以 `Calculate...` 开头的模板化解答。
+- `QC_BLOCK_TRAINING_UNFRIENDLY_SCENES=1` 时，校验预检查会拒绝明显不利于 GSM8K 风格训练的技术化场景。
 - `QC_TRAINING_STYLE_HARD_FAIL=0` 时，训练风格问题只作为 warning 记录，不进入修复循环；这能显著提高每轮 pass 率。
 - `QC_SEVERE_MAX_QUESTION_CHARS`、`QC_SEVERE_MAX_SOLUTION_CHARS`、`QC_SEVERE_MAX_STEP_COUNT` 仍会拦截极端冗长样本，避免完全失控的输出进入训练集。
 - `QC_DIFFICULTY_TOLERANCE=1` 表示允许相邻难度档位通过，避免审计模型对难度边界判断过严导致反复修复。
 - `QC_REQUIRE_EXACT_DIFFICULTY=1` 时才恢复严格难度匹配。
 - `RUN_STEP_REFINEMENT=1` 时，全流程会在验证后运行步骤改写阶段。
-- `REFINE_*` 参数控制步骤改写阶段的并发、最大轮数、token 和 checkpoint；`REFINE_MAX_ROUNDS=-1` 表示无限重试。`REFINE_FORCE_REWRITE=0` 时，已有步骤通过本地质量规则的样本会跳过，只重写未通过的样本。
+- `REFINE_*` 参数控制步骤改写阶段的并发、最大轮数、token 和 checkpoint。
 - 被拒绝的样本不会直接进入训练数据，而是进入已有的重新生成、修复或 replan 流程。
-
-### 合成数量分配策略
-
-旧分配方法仍然是默认值：
-
-```bash
-SYNTHESIS_ALLOCATION_POLICY=legacy
-SYNTHESIS_TARGET_COUNT=
-SYNTHESIS_MIN_PER_SEED=10
-SYNTHESIS_MAX_PER_SEED=50
-```
-
-默认使用 `SYNTHESIS_TARGET_MULTIPLIER` 按数据集规模计算合成总量。对于很大的数据集，可以改用绝对合成额度：
-
-```bash
-SYNTHESIS_TARGET_COUNT=30000
-```
-
-设置 `SYNTHESIS_TARGET_COUNT` 后，它会优先于 `SYNTHESIS_TARGET_MULTIPLIER`，含义是所有种子题最终分到的 `target_count` 总和必须严格等于这个值。`SYNTHESIS_MIN_PER_SEED` 和 `SYNTHESIS_MAX_PER_SEED` 仍然是硬约束；不可行的配置会提前报错，而不是静默少分。旧方案里如果 `SYNTHESIS_MIN_PER_SEED=10` 且种子题很多，总额度不能低于这个最低分配带来的下限。大数据集更推荐配合门槛方案使用：
-
-```bash
-SYNTHESIS_TARGET_COUNT=30000
-SYNTHESIS_MIN_PER_SEED=0
-SYNTHESIS_ALLOCATION_POLICY=threshold_marginal
-SYNTHESIS_ACTIVE_THRESHOLD=10
-```
-
-如果希望把预算集中到更有价值、能形成足够厚训练簇的种子题上，可以开启门槛-边际收益分配：
-
-```bash
-SYNTHESIS_ALLOCATION_POLICY=threshold_marginal
-SYNTHESIS_MIN_PER_SEED=0
-SYNTHESIS_MAX_PER_SEED=50
-SYNTHESIS_ACTIVE_THRESHOLD=5
-SYNTHESIS_MARGINAL_ALPHA=0.7
-SYNTHESIS_THRESHOLD_BOOST=2.0
-SYNTHESIS_COLD_START_FACTOR=0.0
-```
-
-该策略第一轮仍按原始训练价值估计每题 `0..SYNTHESIS_MAX_PER_SEED` 的预算；低于 `SYNTHESIS_ACTIVE_THRESHOLD` 的题不会直接保留，而是进入回收池。系统会根据“训练价值”和“距离门槛的接近程度”决定是否激活这些题；剩余预算再按边际收益递减分给已激活题目，使高价值题获得更厚的局部扩展，同时避免单个题持续垄断预算。如果设置了绝对额度且最后剩余预算小于激活门槛，系统仍会把这部分零头分给剩余价值最高的题，以保证总量严格等于 `SYNTHESIS_TARGET_COUNT`。
 
 ## vLLM / NCCL 配置说明
 
@@ -432,42 +286,6 @@ VLLM_USE_FLASH_ATTN=0
 VLLM_USE_FLASHINFER=0
 FLASHINFER_DISABLE_JIT=1
 ```
-
-### 同一机器并行跑两个 managed 实验
-
-可以并行，但不能只改端口。两个实验的 vLLM 端口、输出目录、PID 文件、日志文件和 GPU 分配都应分开。现在支持通过 `PIPELINE_CONFIG_FILE` 加载 overlay 配置文件：先读取 `config/pipeline.env`，再读取指定的覆盖配置。
-
-两个终端可以这样启动：
-
-```bash
-PIPELINE_CONFIG_FILE=config/parallel_exp_a.example.env bash run/run_stage_sequence.sh gsm8k
-PIPELINE_CONFIG_FILE=config/parallel_exp_b.example.env bash run/run_stage_sequence.sh gsm8k
-```
-
-每个 overlay 至少需要区分这些项：
-
-```bash
-VLLM_BASE_URL=http://127.0.0.1:8911/v1
-VLLM_API_PORT=8911
-OUTPUT_DIR=/path/to/outputs_exp_a
-VLLM_PID_FILE=/path/to/outputs_exp_a/runtime/vllm/vllm.pid
-VLLM_LOG_FILE=/path/to/outputs_exp_a/runtime/vllm/vllm.log
-VLLM_CUDA_VISIBLE_DEVICES=0,1
-```
-
-第二个实验使用另一个端口、另一个输出/运行目录和另一组 GPU。这样脚本切换或关闭 vLLM 时会按当前配置的 PID 文件和端口处理，不会误关另一组实验。
-
-vLLM 关闭逻辑现在是端口隔离的：全流程退出、单阶段退出和模型切换都会把当前配置的端口传给 `run/stop_vllm.sh`。端口优先来自 `VLLM_API_PORT` / `VLLM_PORT`，如果没写则从 `VLLM_BASE_URL` 解析。如果 PID 文件缺失、过期或误指向其他端口，脚本只会回退处理当前端口；没有 `--port` 时默认拒绝全局关闭所有 vLLM。只有显式设置 `STOP_VLLM_ALLOW_GLOBAL=1` 才会启用旧的全局兜底行为。
-
-项目启动的 vLLM 会按当前配置的 `VLLM_LOG_FILE` 做日志大小保护，只处理本实验自己的日志文件：
-
-```bash
-VLLM_LOG_MAX_BYTES=1073741824
-VLLM_LOG_KEEP_BYTES=209715200
-VLLM_LOG_ROTATE_INTERVAL_SEC=60
-```
-
-当日志超过 `VLLM_LOG_MAX_BYTES` 时，会原地保留尾部 `VLLM_LOG_KEEP_BYTES` 字节，并在文件开头写入截断标记。设为 `VLLM_LOG_MAX_BYTES=0` 可以关闭自动截断。
 
 ## 合成计划输出
 
@@ -562,18 +380,9 @@ outputs/pipeline/<dataset>/refined.jsonl
 outputs/pipeline/<dataset>/refine.failed.jsonl
 outputs/pipeline/<dataset>/refine.raw.jsonl
 outputs/pipeline/<dataset>/refine.summary.json
-outputs/pipeline/<dataset>/refine.rounds/
 ```
 
-`refine.rounds/` 会保存每一轮的 `input`、`success`、`raw`、`failed` 和 `summary` 文件，便于像 generate/validation 一样按轮次排查。
-
-该阶段只替换 `steps` 字段，其余字段原样保留。默认只重写未通过本地步骤质量规则的样本，已有步骤合格的样本会直接保留。改写时会要求每一步先结合题目信息或上一步得到的量说明逻辑，再给出需要进行的计算；大量类似 `First, calculate...` 这种先下命令再解释的模板化写法会被拒绝并重试。若手动中断，重新运行会从 `refined.jsonl` 继续。
-
-如果已经有旧的 `refined.jsonl`，但想只重跑 refine 而不重跑前面阶段，可以执行：
-
-```bash
-REFINE_FORCE=1 bash run/07_refine_solution_steps.sh gsm8k
-```
+该阶段只替换 `steps` 字段，其余字段原样保留。若手动中断，重新运行会从 `refined.jsonl` 继续。
 
 ## 训练数据导出
 
@@ -599,52 +408,6 @@ outputs/pipeline/<dataset>/train.jsonl
 
 其中 `output` 会将 validated 记录中的 `steps` 按“一步一行”拼接，并把最终答案单独放在最后一行：`The answer is $\\boxed{XXX}$.`。
 如果某个步骤没有编号，导出器会自动补充 `Step N:`。对于 `Calculate X: ...` 这类机械步骤，导出器会做轻量改写，补充“本步要得到什么中间量、为什么需要它”，让训练目标更像连续推理链条。
-
-## 消融实验
-
-消融实验代码放在 `ablations/`，不会改变主流程已有命令。先将主流程跑到 Stage 03，得到 KB、种子回答和原始 mastery 结果，然后单独运行：
-
-```bash
-bash ablations/run_ablation.sh gsm8k answer_accuracy_only
-bash ablations/run_ablation.sh gsm8k hard_all
-bash ablations/run_ablation.sh gsm8k equal_all
-bash ablations/run_ablation.sh gsm8k easy_all
-bash ablations/run_ablation.sh gsm8k uniform_count
-```
-
-输出目录：
-
-```text
-outputs/ablations/<dataset>/<variant>/
-```
-
-各变体含义：
-
-- `answer_accuracy_only`：移除步骤评价信号，只根据最终答案准确率重新计算 mastery 和合成数量/难度分配。
-- `hard_all`：合成数量仍使用原计算结果，但所有相对难度强制为 `Hard`。
-- `equal_all`：合成数量仍使用原计算结果，但所有相对难度强制为 `Equal`。
-- `easy_all`：合成数量仍使用原计算结果，但所有相对难度强制为 `Easy`。
-- `uniform_count`：难度仍使用原计算结果，但每个种子题的合成数量相同。可通过 `ABLATION_UNIFORM_COUNT=...` 手动指定；不指定时使用原始 `target_count` 的四舍五入均值。
-
-runner 会先生成消融版 `mastery_records.jsonl`，再复用 Stage 04 和 Stage 05，并把所有输出路径改到消融目录。需要继续跑后置环节时加参数：
-
-```bash
-bash ablations/run_ablation.sh gsm8k hard_all --run-validation --run-refine --export
-```
-
-关于后置校验消融：不跑 Stage 07 是支持的，因为 Stage 08 会在没有 `refined.jsonl` 时自动回退到 `validated.jsonl`：
-
-```bash
-bash run/06_validate_generated.sh gsm8k
-bash run/08_export_training_data.sh gsm8k
-```
-
-如果要连 Stage 06 也跳过，需要显式指定导出输入，因为 Stage 08 默认不会直接吃 `generated.jsonl`：
-
-```bash
-EXPORT_INPUT_PATH=/root/brjverl/data_gradual_new/outputs/pipeline/gsm8k/generated.jsonl \
-  bash run/08_export_training_data.sh gsm8k
-```
 
 详见：
 
