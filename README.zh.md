@@ -162,6 +162,24 @@ STAGE_VLLM_MODE=external bash run/run_full_pipeline.sh gsm8k
 
 外部模式下，如果不同阶段使用不同模型，需要你在对应阶段前手动切换 vLLM。
 
+V1.1.0 的 managed 模式只会关闭当前项目 `VLLM_PID_FILE` 和 `VLLM_API_PORT`
+对应的 vLLM，不会扫描并关闭整台机器上的所有 vLLM。单阶段命令会先检查
+`VLLM_BASE_URL` 是否已经提供所需模型：如果模型匹配就直接复用，且不会在结束时
+关闭这个外部已有服务；如果服务不存在或模型不匹配，才会启动或切换到所需模型。
+全流程命令会在阶段之间保留同一个可复用的 vLLM，只有整个流程正常退出或 Ctrl+C
+中断时才统一清理由本流程启动的服务。
+
+机器配置样例放在 `config/machines/`，实验覆盖配置放在 `config/experiments/`。
+推荐先复制机器配置为 `config/pipeline.env`，再用 `PIPELINE_CONFIG_FILE` 选择实验：
+
+```bash
+cp config/machines/remote_root_base.env config/pipeline.env
+PIPELINE_CONFIG_FILE=config/experiments/gsm8k_answer10_legacy_10_50_26x.env bash run/run_full_pipeline.sh gsm8k
+```
+
+V1.1.0 仍保留 V1.0.0 的旧分配算法，因此当前只提供 10 次回答和 20 次回答两个
+legacy GSM8K 样例；门槛/动态分配实验暂时不写入配置，等重新实现该机制后再加入。
+
 ## 主要配置文件
 
 配置文件：

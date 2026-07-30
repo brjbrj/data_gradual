@@ -4,6 +4,10 @@ load_pipeline_config() {
   local root_dir="$1"
   local config_file="${root_dir}/config/pipeline.env"
   local example_file="${root_dir}/config/pipeline.example.env"
+  local override_file="${PIPELINE_CONFIG_FILE:-}"
+  if [[ -n "${override_file}" && "${override_file}" != /* ]]; then
+    override_file="${root_dir}/${override_file}"
+  fi
 
   set -a
   if [[ -f "${config_file}" ]]; then
@@ -12,6 +16,16 @@ load_pipeline_config() {
   elif [[ -f "${example_file}" ]]; then
     # shellcheck disable=SC1090
     source "${example_file}"
+  fi
+  if [[ -n "${override_file}" ]]; then
+    if [[ ! -f "${override_file}" ]]; then
+      echo "[env] PIPELINE_CONFIG_FILE not found: ${override_file}" >&2
+      set +a
+      return 1
+    fi
+    # shellcheck disable=SC1090
+    source "${override_file}"
+    export PIPELINE_CONFIG_FILE="${override_file}"
   fi
   export PIPELINE_CONFIG_LOADED=1
   set +a

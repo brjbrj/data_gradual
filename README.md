@@ -113,7 +113,10 @@ bash run/run_generate_questions.sh gsm8k
 
 `run_full_pipeline.sh` delegates to the numbered stage sequence. By default it
 uses managed vLLM mode so one command can start/switch the stage-specific model
-and stop vLLM when the sequence exits. If you already started vLLM manually, run:
+and stop only the vLLM process recorded by this project's PID file and API port
+when the sequence exits. It keeps a matching model alive between adjacent
+stages, so full runs do not repeatedly stop and restart the same vLLM service.
+If you already started vLLM manually, run:
 
 ```bash
 STAGE_VLLM_MODE=external bash run/run_full_pipeline.sh gsm8k
@@ -121,6 +124,10 @@ STAGE_VLLM_MODE=external bash run/run_full_pipeline.sh gsm8k
 
 In external mode, you must switch vLLM yourself before each stage that requires
 a different served model.
+
+Machine-specific config examples live in `config/machines/`, and runnable
+legacy GSM8K experiment overlays live in `config/experiments/`. See
+`config/README.md` for the recommended base-plus-overlay pattern.
 
 ## Validation configuration
 
@@ -133,6 +140,7 @@ Edit `config/pipeline.env`.
 | `PIPELINE_PYTHON` | empty | Optional absolute pipeline Python path; skips Conda activation |
 | `VLLM_CONDA_ENV` | `qwen` | Conda environment used by the vLLM server |
 | `VLLM_PYTHON` | empty | Optional absolute vLLM Python path; skips Conda activation |
+| `VLLM_PID_FILE` | `outputs/runtime/vllm/vllm.pid` | Managed vLLM PID marker; use a different file per concurrent experiment |
 | `RUN_VALIDATION` | `1` | Enable validation in the full pipeline |
 | `QC_CONCURRENCY` | `256` | Concurrent verifier requests |
 | `QC_BLIND_VOTES` | `2` | Initial independent blind solutions |
@@ -231,15 +239,17 @@ VLLM_START_TIMEOUT=600
 VLLM_START_POLL_SEC=5
 ```
 
-In `managed` mode, the pipeline starts the victim model, stops it after the
-answering stage, and starts the evaluator/generator model on the same port
-`8911`. Every client request continues to use the single configured
-`VLLM_BASE_URL`.
+In `managed` mode, single numbered stage commands first reuse an already
+running matching model on `VLLM_BASE_URL`. If the endpoint is down or serves a
+different model, the stage stops only the configured `VLLM_PID_FILE` /
+`VLLM_API_PORT` service before launching the expected model. A stage only
+auto-stops vLLM on exit when it actually started the service and
+`STAGE_VLLM_STOP_ON_EXIT=1`.
 
-All datasets share `outputs/runtime/vllm/` for the managed PID, model marker,
-and server log. This prevents a dataset-name change from misclassifying the
-same managed service as an external process. Do not run two full pipelines
-concurrently against the same managed port.
+Full pipeline runs keep vLLM alive between stages and clean up once at final
+exit or Ctrl+C. For multiple concurrent experiments on one machine, give each
+project copy a different `VLLM_API_PORT`, `VLLM_BASE_URL`, `VLLM_PID_FILE`, and
+GPU assignment.
 
 Foreground logging is configurable:
 

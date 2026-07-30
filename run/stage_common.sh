@@ -139,7 +139,8 @@ request = urllib.request.Request(
     method="GET",
 )
 try:
-    with urllib.request.urlopen(request, timeout=5) as response:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=5) as response:
         payload = json.loads(response.read().decode("utf-8"))
 except urllib.error.HTTPError as exc:
     try:
@@ -198,6 +199,33 @@ stage_check_served_model() {
   return 1
 }
 
+stage_vllm_port() {
+  resolve_vllm_api_port 2>/dev/null || printf '%s\n' "${VLLM_API_PORT:-8911}"
+}
+
+stage_start_managed_vllm() {
+  local expected="$1"
+  local label="$2"
+  local pid_file="${VLLM_PID_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.pid}"
+  local log_file="${VLLM_LOG_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.log}"
+  local port
+  port="$(stage_vllm_port)"
+  stage_log "starting managed vLLM for ${label}: ${expected}"
+  bash "${STAGE_ROOT_DIR}/run/start_vllm.sh" \
+    --background \
+    --pid-file "${pid_file}" \
+    --log-file "${log_file}" \
+    --model "${expected}" >/dev/null
+  STAGE_MANAGED_PID_FILE="${pid_file}"
+  STAGE_MANAGED_PORT="${port}"
+  export STAGE_MANAGED_PID_FILE STAGE_MANAGED_PORT
+  if [[ "${STAGE_VLLM_STOP_ON_EXIT:-0}" == "1" ]]; then
+    trap 'stage_cleanup_managed_vllm $?' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+  fi
+}
+
 stage_ensure_vllm() {
   local expected="$1"
   local label="${2:-model}"
@@ -223,22 +251,23 @@ stage_ensure_vllm() {
   fi
 
   if [[ "${mode}" == "managed" ]]; then
-    local pid_file="${VLLM_PID_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.pid}"
-    local log_file="${VLLM_LOG_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.log}"
-    stage_log "starting managed vLLM for ${label}: ${expected}"
-    "${STAGE_ROOT_DIR}/run/start_vllm.sh" \
-      --background \
-      --pid-file "${pid_file}" \
-      --log-file "${log_file}" \
-      --model "${expected}" >/dev/null
-    if [[ "${STAGE_VLLM_STOP_ON_EXIT:-0}" == "1" ]]; then
-      STAGE_MANAGED_PID_FILE="${pid_file}"
-      export STAGE_MANAGED_PID_FILE
-      trap stage_cleanup_managed_vllm EXIT
+    if stage_check_served_model "${expected}"; then
+      stage_log "reusing existing vLLM for ${label}: ${expected}"
+      return 0
     fi
+    local pid_file="${VLLM_PID_FILE:-${OUTPUT_DIR}/runtime/vllm/vllm.pid}"
+    local port
+    port="$(stage_vllm_port)"
+    stage_log "managed vLLM will stop only configured endpoint before starting ${label}: pid_file=${pid_file} port=${port}"
+    bash "${STAGE_ROOT_DIR}/run/stop_vllm.sh" --pid-file "${pid_file}" --port "${port}" >/dev/null 2>&1 || true
+    stage_start_managed_vllm "${expected}" "${label}"
   elif [[ "${mode}" != "external" ]]; then
     echo "[stage] unsupported STAGE_VLLM_MODE=${mode}; use external, managed, or skip" >&2
     return 1
+  else
+    if stage_check_served_model "${expected}"; then
+      return 0
+    fi
   fi
 
   local waited=0
@@ -269,7 +298,12 @@ stage_require_file() {
 }
 
 stage_cleanup_managed_vllm() {
+  local status="${1:-0}"
+  trap - EXIT INT TERM
   if [[ -n "${STAGE_MANAGED_PID_FILE:-}" ]]; then
-    "${STAGE_ROOT_DIR}/run/stop_vllm.sh" --pid-file "${STAGE_MANAGED_PID_FILE}" >/dev/null 2>&1 || true
+    bash "${STAGE_ROOT_DIR}/run/stop_vllm.sh" \
+      --pid-file "${STAGE_MANAGED_PID_FILE}" \
+      --port "${STAGE_MANAGED_PORT:-$(stage_vllm_port)}" >/dev/null 2>&1 || true
   fi
+  exit "${status}"
 }

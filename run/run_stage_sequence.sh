@@ -18,12 +18,16 @@ else
 fi
 export STAGE_SEQUENCE_VLLM_MODE="${STAGE_VLLM_MODE}"
 if [[ "${STAGE_VLLM_MODE}" == "managed" ]]; then
-  export STAGE_VLLM_STOP_ON_EXIT="${STAGE_VLLM_STOP_ON_EXIT:-0}"
+  export STAGE_VLLM_STOP_ON_EXIT=0
   STAGE_SEQUENCE_PID_FILE="${VLLM_PID_FILE:-${OUTPUT_DIR:-${ROOT_DIR}/outputs}/runtime/vllm/vllm.pid}"
+  STAGE_SEQUENCE_PORT="$(resolve_vllm_api_port 2>/dev/null || printf '%s\n' "${VLLM_API_PORT:-8911}")"
   cleanup_sequence_vllm() {
-    "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${STAGE_SEQUENCE_PID_FILE}" >/dev/null 2>&1 || true
+    trap - EXIT INT TERM
+    bash "${ROOT_DIR}/run/stop_vllm.sh" --pid-file "${STAGE_SEQUENCE_PID_FILE}" --port "${STAGE_SEQUENCE_PORT}" >/dev/null 2>&1 || true
   }
-  trap cleanup_sequence_vllm EXIT INT TERM
+  trap cleanup_sequence_vllm EXIT
+  trap 'cleanup_sequence_vllm; exit 130' INT
+  trap 'cleanup_sequence_vllm; exit 143' TERM
 fi
 
 echo "[stage-sequence] dataset=${DATASET_ARG}"

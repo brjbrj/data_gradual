@@ -26,11 +26,7 @@ class ExternalVLLMManagerTest(unittest.TestCase):
                 start_poll_sec=1,
                 runtime_mode="external",
             )
-            with patch.object(
-                manager,
-                "probe",
-                return_value="/models/example",
-            ):
+            with patch.object(manager, "probe_models", return_value=["/models/example"]):
                 manager.start("/models/example")
 
             self.assertEqual(manager.current_model, "/models/example")
@@ -55,6 +51,26 @@ class ExternalVLLMManagerTest(unittest.TestCase):
             'output_dir_path / "runtime" / "vllm"',
             source,
         )
+
+    def test_managed_stop_is_scoped_to_pid_file_and_port(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manager = VLLMManager(Path(directory), runtime_mode="managed")
+            manager.owned = True
+            with patch.dict("os.environ", {"VLLM_API_PORT": "11911"}):
+                with patch.object(manager, "_run") as run:
+                    with patch.object(manager, "probe", return_value=None):
+                        with patch("kb_pipeline.pipeline.time.sleep"):
+                            manager.stop(force=True)
+
+            command = run.call_args.args[0]
+            self.assertIn("--pid-file", command)
+            self.assertIn("--port", command)
+            self.assertIn("11911", command)
+
+    def test_stop_script_refuses_unscoped_global_shutdown(self) -> None:
+        script = (Path(pipeline_module.__file__).resolve().parents[1] / "run" / "stop_vllm.sh").read_text(encoding="utf-8")
+        self.assertIn("refusing to stop vLLM without --pid-file or --port", script)
+        self.assertNotIn('pgrep -f "vllm.entrypoints.openai.api_server"', script)
 
 
 if __name__ == "__main__":

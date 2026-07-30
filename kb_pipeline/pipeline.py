@@ -98,7 +98,8 @@ class VLLMManager:
             method="GET",
         )
         try:
-            with urllib.request.urlopen(request, timeout=5) as response:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(request, timeout=5) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             try:
@@ -201,6 +202,9 @@ class VLLMManager:
         last_progress_log = -30
         while True:
             running_models = self.probe_models()
+            if not running_models:
+                single_model = self.probe()
+                running_models = [single_model] if single_model else []
             if self._served_models_match(running_models, model):
                 self.current_model = model
                 self.owned = False
@@ -249,10 +253,8 @@ class VLLMManager:
         if not force and not self.owned:
             return
         script = _project_root() / "run" / "stop_vllm.sh"
-        if self.pid_file.exists():
-            self._run(["bash", str(script), "--pid-file", str(self.pid_file)])
-        else:
-            self._run(["bash", str(script)])
+        port = os.environ.get("VLLM_API_PORT") or os.environ.get("VLLM_PORT") or "8911"
+        self._run(["bash", str(script), "--pid-file", str(self.pid_file), "--port", str(port)])
         for _ in range(30):
             time.sleep(1)
             if self.probe() is None:
