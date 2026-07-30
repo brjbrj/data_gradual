@@ -1,5 +1,15 @@
 # Changelog
 
+## V1.1.1
+
+- Reorganized configuration examples into complete machine-specific folders:
+  `config/remote/` and `config/jizhicfs/`.
+- Added ready-to-run GSM8K 10-answer and 20-answer legacy configs for both
+  machines.
+- Added complete `evaluate.env` examples for both machines.
+- Expanded all jizhicfs model and project paths to concrete versioned paths
+  under `/jizhicfs/hymiezhao/lpc/repos/brj/data_gradual_V1.1.1`.
+
 ## V1.1.0
 
 - Fixed managed vLLM startup when shell scripts are not executable by invoking

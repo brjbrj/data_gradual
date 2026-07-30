@@ -169,15 +169,15 @@ V1.1.0 的 managed 模式只会关闭当前项目 `VLLM_PID_FILE` 和 `VLLM_API_
 全流程命令会在阶段之间保留同一个可复用的 vLLM，只有整个流程正常退出或 Ctrl+C
 中断时才统一清理由本流程启动的服务。
 
-机器配置样例放在 `config/machines/`，实验覆盖配置放在 `config/experiments/`。
-推荐先复制机器配置为 `config/pipeline.env`，再用 `PIPELINE_CONFIG_FILE` 选择实验：
+完整配置样例放在 `config/remote/` 和 `config/jizhicfs/`。
+推荐直接复制对应机器和实验的完整配置为 `config/pipeline.env`：
 
 ```bash
-cp config/machines/remote_root_base.env config/pipeline.env
-PIPELINE_CONFIG_FILE=config/experiments/gsm8k_answer10_legacy_10_50_26x.env bash run/run_full_pipeline.sh gsm8k
+cp config/remote/gsm8k_answer10_legacy_10_50_26x.env config/pipeline.env
+bash run/run_full_pipeline.sh gsm8k
 ```
 
-V1.1.0 仍保留 V1.0.0 的旧分配算法，因此当前只提供 10 次回答和 20 次回答两个
+V1.1.1 仍保留 V1.0.0 的旧分配算法，因此当前只提供 10 次回答和 20 次回答两个
 legacy GSM8K 样例；门槛/动态分配实验暂时不写入配置，等重新实现该机制后再加入。
 
 ## 主要配置文件

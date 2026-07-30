@@ -125,9 +125,9 @@ STAGE_VLLM_MODE=external bash run/run_full_pipeline.sh gsm8k
 In external mode, you must switch vLLM yourself before each stage that requires
 a different served model.
 
-Machine-specific config examples live in `config/machines/`, and runnable
-legacy GSM8K experiment overlays live in `config/experiments/`. See
-`config/README.md` for the recommended base-plus-overlay pattern.
+Complete machine-and-experiment config examples live in `config/remote/` and
+`config/jizhicfs/`. Copy one of those files directly to `config/pipeline.env`;
+see `config/README.md` for the exact commands.
 
 ## Validation configuration
 
